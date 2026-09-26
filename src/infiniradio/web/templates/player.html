@@ -53,9 +53,26 @@
   }
   setInterval(() => refreshCard(false), 5000);
 
+  function parsePdt(frag) {
+    if (!frag) return null;
+    if (Number.isFinite(frag.programDateTime) && frag.programDateTime > 0)
+      return frag.programDateTime;
+    // Fallback: parse the raw tag ourselves — hls.js used Date.parse on it,
+    // which returns NaN in strict browsers for ffmpeg's ±HHMM offsets.
+    const raw = frag.rawProgramDateTime;
+    if (typeof raw === 'string' && raw) {
+      const m = raw.match(/([+-]\d{2})(\d{2})$/);
+      const norm = m ? raw.slice(0, m.index) + m[1] + ':' + m[2] : raw;
+      const t = Date.parse(norm);
+      if (Number.isFinite(t)) return t;
+    }
+    return null;
+  }
+
   function onFrag(frag) {
-    if (frag && frag.programDateTime) {
-      anchor = { pdt: frag.programDateTime, at: Date.now() };
+    const pdt = parsePdt(frag);
+    if (pdt !== null) {
+      anchor = { pdt: pdt, at: Date.now() };
       refreshCard(true);
     } else {
       anchor = null;   // no timeline info -> server falls back to wall clock

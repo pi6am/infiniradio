@@ -296,6 +296,26 @@ async def api_track(request: Request, track_id: int):
 
 # ------------------------------------------------------------------ HLS files
 
+import re as _re
+
+_PDT_TAIL = _re.compile(r"([+-]\d{2})(\d{2})$")
+
+
+def _fix_pdt_offsets(text: str) -> str:
+    """Normalize #EXT-X-PROGRAM-DATE-TIME offsets to ±HH:MM.
+
+    ffmpeg's strftime emits `-0700` (no colon), which the ECMAScript
+    Date Time String Format does not allow; Firefox's Date.parse returns
+    NaN for it (Chrome is lenient), breaking hls.js timeline sync there.
+    """
+    out = []
+    for line in text.splitlines():
+        if line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
+            line = _PDT_TAIL.sub(r"\1:\2", line)
+        out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
 @router.get("/live/{fname:path}")
 async def live(request: Request, fname: str):
     rt = request.app.state.rt
@@ -308,8 +328,9 @@ async def live(request: Request, fname: str):
     if not p.is_file():
         return Response(status_code=404)
     if p.suffix == ".m3u8":
-        headers = {"Cache-Control": "no-store"}
-    else:
-        # Segments are immutable for as long as they exist in the window.
-        headers = {"Cache-Control": "public, max-age=180"}
-    return FileResponse(p, headers=headers)
+        # Playlists must never be cached, and their PDT offsets normalized.
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(_fix_pdt_offsets(p.read_text(encoding="utf-8")),
+                                 headers={"Cache-Control": "no-store"})
+    # Segments are immutable for as long as they exist in the window.
+    return FileResponse(p, headers={"Cache-Control": "public, max-age=180"})
