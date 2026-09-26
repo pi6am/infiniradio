@@ -68,8 +68,8 @@ DEFAULTS: dict[str, Any] = {
         "ffprobe_path": "ffprobe",
     },
     "dj": {
-        "min_library": 8,
-        "generate_every_minutes": 15,
+        "max_queued_jobs": 1,
+        "runway_minutes": 5.0,
         "repeat_window_tracks": 25,
         "repeat_window_hours": 6.0,
         "new_track_share": 0.35,
@@ -87,10 +87,13 @@ DEFAULTS: dict[str, Any] = {
 
 # key -> (default, cast, human label, help) — editable from the admin panel.
 RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
-    "dj.min_library": (8, int, "Minimum library size", "Commission new music whenever fewer ready tracks than this exist"),
-    "dj.generate_every_minutes": (15, int, "Generation cadence (minutes)",
-                                   "Keep generating fresh music at this interval while under the disk "
-                                   "quota, even above the minimum library size (0 = only fill up to the minimum)"),
+    "dj.max_queued_jobs": (1, int, "Max queued generation jobs",
+                           "Commission at most this many jobs ahead of the one running; keeps decisions "
+                           "just-in-time (latest prompts and votes)"),
+    "dj.runway_minutes": (5.0, float, "Generation runway (minutes)",
+                          "Only generate when less than this much eligible material (playable without "
+                          "violating the repeat windows) remains; the library grows until the windows "
+                          "are comfortably satisfied"),
     "dj.repeat_window_tracks": (25, int, "Repeat window (tracks)", "Do not play a track again within the last N aired tracks"),
     "dj.repeat_window_hours": (6.0, float, "Repeat window (hours)", "Do not play a track again within N hours"),
     "dj.new_track_share": (0.35, float, "New track share", "Fraction of picks reserved for never-played tracks (exploration)"),

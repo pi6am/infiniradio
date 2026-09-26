@@ -5,12 +5,17 @@ using Wilson scores, with a share of picks reserved for never-played tracks so
 new music gets airtime and can earn votes. Falls back to least-recently-played
 when nothing is eligible, so the stream never starves.
 
-Commissioning: a background tick keeps the library above `dj.min_library` by
-queueing generation jobs. Prompt choice is Thompson sampling over each
-prompt's tracks' votes (self-optimizing prompt library). With probability
-`dj.variation_rate` the job is a variation: a popular track's saved ABC
-re-rendered — possibly under a *different style prompt* (new instrumentation)
-and always with a fresh seed.
+Commissioning: just-in-time and demand-driven. A single job is commissioned
+only when the "runway" — eligible material that can air without violating
+the repeat windows — drops below dj.runway_minutes, and only when fewer
+than dj.max_queued_jobs are waiting. This keeps every decision (prompt
+choice, variation vs fresh) informed by the latest prompts and listener
+votes, and grows the library until the repeat windows are comfortably
+satisfied; the disk-quota pause is the hard stop. Prompt choice is
+Thompson sampling over each prompt's tracks' votes (self-optimizing prompt
+library). With probability `dj.variation_rate` the job is a variation: a
+popular track's saved ABC re-rendered — possibly under a *different style
+prompt* (new instrumentation) and always with a fresh seed.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from . import janitor, library
 from .config import Config, runtime_get
 from .db import DB
 from .generator.base import GenRequest, Generator
-from .util import iso, parse_iso, utcnow, wilson_score
+from .util import iso, utcnow, wilson_score
 
 log = logging.getLogger(__name__)
 
@@ -45,21 +50,26 @@ def recent_track_ids(db: DB, n: int) -> set[int]:
     return {r["track_id"] for r in rows}
 
 
-def pick_next(db: DB, cfg: Config, exclude_ids: set[int] = set()) -> dict | None:
+def eligible_tracks(db: DB, cfg, exclude_ids: set[int] = set()) -> list[dict]:
+    """Ready tracks the DJ may pick right now without violating the repeat
+    windows: not among the most recent repeat_window_tracks airs, and not
+    played within repeat_window_hours."""
     last_n = recent_track_ids(db, runtime_get(cfg, db, "dj.repeat_window_tracks"))
     cutoff = iso(utcnow() - timedelta(hours=runtime_get(cfg, db, "dj.repeat_window_hours")))
-
     rows = db.query("SELECT * FROM tracks WHERE status = 'ready'")
-    eligible = [
-        r for r in rows
-        if r["id"] not in last_n
-        and r["id"] not in exclude_ids
-        and (r["last_played_at"] is None or r["last_played_at"] <= cutoff)
-    ]
+    return [r for r in rows
+            if r["id"] not in last_n
+            and r["id"] not in exclude_ids
+            and (r["last_played_at"] is None or r["last_played_at"] <= cutoff)]
+
+
+def pick_next(db: DB, cfg: Config, exclude_ids: set[int] = set()) -> dict | None:
+    eligible = eligible_tracks(db, cfg, exclude_ids)
 
     if not eligible:
         # Nothing eligible (tiny library): fall back to least-recently-played.
-        rest = [r for r in rows if r["id"] not in exclude_ids]
+        rest = [r for r in db.query("SELECT * FROM tracks WHERE status = 'ready'")
+                if r["id"] not in exclude_ids]
         if not rest:
             return None
         rest.sort(key=lambda r: (r["last_played_at"] is not None, r["last_played_at"] or ""))
@@ -223,7 +233,17 @@ async def job_runner(rt) -> None:
 
 
 async def _commission_tick(rt) -> None:
-    """One commissioning decision (see commission_loop)."""
+    """One commissioning decision (see commission_loop).
+
+    Just-in-time and demand-driven: commission a single job only when the
+    "runway" — eligible material that can be aired without violating the
+    repeat windows — drops below dj.runway_minutes, and only when fewer
+    than dj.max_queued_jobs are already waiting. Decisions stay informed by
+    the latest prompts and votes, and the queue never grows faster than
+    the serial GPU runner drains it. The library grows until the repeat
+    windows are comfortably satisfied (the runway then stays above the
+    threshold); the disk-quota pause remains the hard stop.
+    """
     if not rt.generator:
         return  # no generator configured (playout-only mode)
     paused, reason = janitor.generation_paused(rt.db, rt.cfg)
@@ -231,40 +251,21 @@ async def _commission_tick(rt) -> None:
         log.debug("commissioning paused: %s", reason)
         return
 
-    counts = rt.db.one(
-        "SELECT COALESCE(SUM(status = 'ready'), 0) AS ready,"
-        " COALESCE(SUM(status = 'generating'), 0) AS generating FROM tracks"
-    ) or {"ready": 0, "generating": 0}
     queued = rt.db.one(
         "SELECT COUNT(*) AS n FROM generation_jobs WHERE status = 'queued'"
     )["n"]
-    min_library = runtime_get(rt.cfg, rt.db, "dj.min_library")
-    want = min_library - (counts["ready"] + counts["generating"] + queued)
-
-    if want > 0:
-        for _ in range(min(want, 4)):  # cap the burst; runner executes serially
-            if not _commission_one(rt, counts["ready"], min_library):
-                break
+    if queued >= runtime_get(rt.cfg, rt.db, "dj.max_queued_jobs"):
         return
 
-    # Above the minimum: an infinite radio keeps producing fresh music at a
-    # steady cadence anyway — the disk quota (with played-track eviction) is
-    # the real throttle, not the library size.
-    cadence = runtime_get(rt.cfg, rt.db, "dj.generate_every_minutes")
-    if cadence <= 0:
-        return
-    if rt.db.one("SELECT id FROM generation_jobs WHERE status IN ('queued', 'running')"):
-        return
-    last = rt.db.one(
-        "SELECT finished_at FROM generation_jobs WHERE status = 'done'"
-        " ORDER BY id DESC LIMIT 1"
-    )
-    if last and parse_iso(last["finished_at"]) > utcnow() - timedelta(minutes=cadence):
-        return
-    _commission_one(rt, counts["ready"], min_library)
+    eligible = eligible_tracks(rt.db, rt.cfg)
+    runway_s = sum(r["duration_s"] or 0.0 for r in eligible)
+    if runway_s >= runtime_get(rt.cfg, rt.db, "dj.runway_minutes") * 60.0:
+        return  # enough pickable material left; no urgency
+
+    _commission_one(rt, len(eligible), runway_s)
 
 
-def _commission_one(rt, ready_count: int, min_library: int) -> bool:
+def _commission_one(rt, eligible_n: int, runway_s: float) -> bool:
     """Enqueue one job: a variation of a proven track, or a fresh prompt."""
     if random.random() < runtime_get(rt.cfg, rt.db, "dj.variation_rate"):
         parent = variation_parent(rt.db, rt.cfg)
@@ -277,18 +278,20 @@ def _commission_one(rt, ready_count: int, min_library: int) -> bool:
             if not dup:
                 enqueue_job(rt.db, prompt_id=prompt_id,
                             parent_track_id=parent["id"])
-                log.info("commissioned variation of track %s (%s) in style %s",
-                         parent["id"], parent["title"],
-                         prompt["name"] if prompt else "(same style)")
+                log.info("commissioned variation of track %s (%s) in style %s "
+                         "(runway %.1f min)", parent["id"], parent["title"],
+                         prompt["name"] if prompt else "(same style)",
+                         runway_s / 60.0)
                 return True
 
     prompt = thompson_prompt(rt.db)
     if prompt:
         enqueue_job(rt.db, prompt_id=prompt["id"])
-        log.info("commissioned new track with prompt %r (library %d/%d)",
-                 prompt["name"], ready_count, min_library)
+        log.info("commissioned new track with prompt %r (runway %.1f min over "
+                 "%d eligible tracks)", prompt["name"], runway_s / 60.0,
+                 eligible_n)
         return True
-    if ready_count == 0:
+    if eligible_n == 0:
         log.warning("library empty but no enabled prompts exist — "
                     "add prompts in the admin panel or set prompts.seed_dir")
     return False
