@@ -1,10 +1,10 @@
 <span class="votebox">
   <button class="vote up{% if t.my_vote == 1 %} on{% endif %}"
           hx-post="/vote/{{ t.id }}/{{ 0 if t.my_vote == 1 else 1 }}"
-          hx-vals="js:{at: (window.__npAt ? window.__npAt() : null)}"
+          hx-vals="js:{at: (window.__npAt && window.__npAt()) || undefined}"
           hx-target="#np-card" hx-swap="outerHTML">▲ {{ t.vote_up }}</button>
   <button class="vote down{% if t.my_vote == -1 %} on{% endif %}"
           hx-post="/vote/{{ t.id }}/{{ 0 if t.my_vote == -1 else -1 }}"
-          hx-vals="js:{at: (window.__npAt ? window.__npAt() : null)}"
+          hx-vals="js:{at: (window.__npAt && window.__npAt()) || undefined}"
           hx-target="#np-card" hx-swap="outerHTML">▼ {{ t.vote_down }}</button>
 </span>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 import uuid
 from datetime import timedelta
@@ -216,18 +217,34 @@ async def nowplaying_card(request: Request, at: float | None = None):
 
 @router.post("/vote/{track_id}/{value}", response_class=HTMLResponse)
 async def vote_fragment(request: Request, track_id: int, value: int,
-                        at: float | None = Form(None)):
+                        at: str = Form("")):
     rt = request.app.state.rt
     listener = ensure_listener(request)
     _apply_vote(rt, request, track_id, value, listener)
     resp = request.app.state.templates.TemplateResponse(
         request, "_nowplaying.html",
         {"request": request,
-         "np": now_playing(rt.db, rt.cfg, listener[0], at_ms=at, encoder=_encoder(rt))},
+         "np": now_playing(rt.db, rt.cfg, listener[0], at_ms=_parse_at(at),
+                           encoder=_encoder(rt))},
     )
     if listener[1]:
         _set_cookie(resp, listener[1])
     return resp
+
+
+def _parse_at(raw: str | None) -> float | None:
+    """Defensive parse of a client-reported timeline position.
+
+    htmx form-encodes js-null as the string "null"; never let that (or any
+    other junk) 422 the vote endpoint — fall back to clock mode instead.
+    """
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) and v > 0 else None
 
 
 # ------------------------------------------------------------------ JSON API
