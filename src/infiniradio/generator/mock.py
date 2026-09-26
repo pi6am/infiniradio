@@ -1,7 +1,9 @@
 """Mock generator: local ffmpeg sine tones + synthetic ABC.
 
-Lets the entire pipeline (DJ, stream, votes, eviction, admin) run on a
-machine without a GPU. Selected via [generator] backend = "mock".
+Testing only — reachable exclusively via the --mockaudio command line flag,
+never through config, so listeners cannot accidentally be served test tones.
+Exercises the whole pipeline (DJ, stream, votes, eviction, admin) on a
+machine without a GPU.
 """
 
 from __future__ import annotations

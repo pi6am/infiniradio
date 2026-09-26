@@ -224,8 +224,8 @@ async def job_runner(rt) -> None:
 
 async def _commission_tick(rt) -> None:
     """One commissioning decision (see commission_loop)."""
-    if not rt.generator or rt.cfg.get("generator.backend") == "off":
-        return
+    if not rt.generator:
+        return  # no generator configured (playout-only mode)
     paused, reason = janitor.generation_paused(rt.db, rt.cfg)
     if paused:
         log.debug("commissioning paused: %s", reason)

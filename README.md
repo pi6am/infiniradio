@@ -31,19 +31,32 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
 - **Cross-platform** — Linux/macOS/Windows, no named pipes or OS-specific tricks;
   the only external dependency is **ffmpeg**.
 
-## Quickstart (no GPU needed)
+## Quickstart
 
 ```bash
 # Python 3.11+, ffmpeg on PATH
 uv venv && uv pip install -e .        # or: python -m pip install -e .
-cp config.toml.example config.toml    # defaults use the mock generator
+cp config.toml.example config.toml    # set [generator] backend + [comfyui] url
 python -m infiniradio passwd          # set the admin password
 python -m infiniradio                 # serve on http://127.0.0.1:8000
 ```
 
-Open `http://127.0.0.1:8000/` — the mock generator synthesizes tone "songs" with fake
-ABC so you can exercise the whole pipeline (DJ, votes, eviction, admin) before pointing
-it at a real GPU.
+The server refuses to start if no generator backend is configured and the
+library is empty (it would only ever broadcast silence). With a backend
+configured but ComfyUI unreachable, it starts and surfaces the failures in
+the admin dashboard.
+
+## Testing without a GPU
+
+```bash
+python -m infiniradio --mockaudio
+```
+
+The mock generator is **only** reachable through this flag — never through
+config — so a misconfigured deployment can never serve sine tones to
+listeners. It synthesizes tone "songs" with fake ABC scores, letting you
+exercise the whole pipeline (DJ, votes, eviction, admin) before pointing it
+at a real GPU.
 
 ## Real generation (ComfyUI + YuE2)
 

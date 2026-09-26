@@ -27,7 +27,10 @@ DEFAULTS: dict[str, Any] = {
         "password_hash": "",
     },
     "generator": {
-        "backend": "mock",  # mock | comfyui | off
+        # comfyui | off  ("" = unspecified; the server refuses to start with
+        # no generator and an empty library). The mock generator is
+        # testing-only and cannot be selected here — use --mockaudio.
+        "backend": "",
     },
     "comfyui": {
         "url": "http://127.0.0.1:8188",

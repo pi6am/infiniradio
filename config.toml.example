@@ -16,11 +16,11 @@ username = "admin"
 password_hash = ""
 
 [generator]
-# mock | comfyui | off
-#   mock    - synthesize sine-wave "songs" locally (no GPU, great for development)
-#   comfyui - submit the YuE2 workflow to a ComfyUI server
-#   off     - never generate (manage the library manually)
-backend = "mock"
+# comfyui | off
+# The mock generator (sine tones) is testing-only and can NOT be selected
+# here — run `python -m infiniradio --mockaudio` instead. If no backend is
+# configured and the library is empty, the server refuses to start.
+backend = "comfyui"
 
 [comfyui]
 url = "http://127.0.0.1:8188"

@@ -38,29 +38,81 @@ class Runtime:
     started: datetime = field(default_factory=utcnow)
 
 
-def make_generator(cfg: Config) -> Generator | None:
-    backend = str(cfg.get("generator.backend", "mock"))
+class StartupError(RuntimeError):
+    """Fatal misconfiguration; the server must not start."""
+
+
+def resolve_backend(cfg: Config, mockaudio: bool) -> str:
+    """Effective generator backend: 'mock' | 'comfyui' | 'off'.
+
+    The mock generator is testing-only and reachable exclusively through the
+    --mockaudio command line flag so that no listener can ever be served sine
+    tones by accident (e.g. a missing or unloaded config file).
+    """
+    if mockaudio:
+        configured = str(cfg.get("generator.backend", "") or "").strip().lower()
+        if configured not in ("", "mock"):
+            log.warning("--mockaudio overrides configured [generator] backend %r", configured)
+        return "mock"
+    configured = str(cfg.get("generator.backend", "") or "").strip().lower()
+    if configured == "mock":
+        raise StartupError(
+            '[generator] backend = "mock" is testing-only and cannot be set in '
+            "config; start the server with --mockaudio if you really want "
+            "sine-tone test audio."
+        )
+    if configured in ("", "off"):
+        return "off"
+    if configured == "comfyui":
+        return "comfyui"
+    raise StartupError(
+        f"unknown [generator] backend {configured!r} (expected 'comfyui' or 'off')"
+    )
+
+
+def make_generator(cfg: Config, backend: str) -> Generator | None:
     if backend == "comfyui":
         return ComfyUIGenerator(cfg)
     if backend == "mock":
         return MockGenerator(cfg)
-    if backend != "off":
-        log.warning("unknown generator backend %r — treating as 'off'", backend)
-    return None
+    return None  # 'off'
 
 
-def create_app(config_path: str | Path | None = None) -> FastAPI:
+def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -> FastAPI:
     cfg = load_config(config_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        try:
+            backend = resolve_backend(cfg, mockaudio)
+        except StartupError as exc:
+            log.error("startup failed: %s", exc)
+            raise RuntimeError(str(exc)) from exc
+
         data_dir = cfg.path("library.data_dir")
         (data_dir / "music").mkdir(parents=True, exist_ok=True)
         (data_dir / "hls").mkdir(parents=True, exist_ok=True)
         db = DB(data_dir / "infiniradio.db")
         library.import_prompts(db, cfg)
 
-        generator = make_generator(cfg)
+        generator = make_generator(cfg, backend)
+        if generator is None:
+            # No generation configured. That is only viable if there is an
+            # existing library to broadcast; otherwise the station could air
+            # nothing but silence forever, so refuse to start.
+            ready = db.one(
+                "SELECT COUNT(*) AS n FROM tracks WHERE status = 'ready'"
+            )["n"]
+            if ready == 0:
+                msg = ("no generator backend configured and the library is empty — "
+                       'set [generator] backend = "comfyui" (plus [comfyui] url) in '
+                       "config.toml, or run with --mockaudio for testing")
+                log.error("startup failed: %s", msg)
+                raise RuntimeError(msg)
+            log.warning(
+                "no generator backend configured — airing the existing library "
+                "(%d ready track(s)); no new music will be generated", ready)
+
         app.state.sessions = auth.Sessions(auth.get_server_secret(db, cfg))
 
         from .streamer.feeder import Feeder  # deferred import (avoids cycles)
@@ -74,8 +126,7 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
             tasks.append(asyncio.create_task(dj.job_runner(rt)))
             tasks.append(asyncio.create_task(dj.commission_loop(rt)))
 
-        log.info("infiniradio on air: backend=%s data=%s",
-                 cfg.get("generator.backend"), data_dir)
+        log.info("infiniradio on air: backend=%s data=%s", backend, data_dir)
         try:
             yield
         finally:

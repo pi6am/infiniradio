@@ -9,7 +9,7 @@ import sys
 from .util import setup_logging
 
 
-def cmd_serve(config: str | None, verbose: bool) -> int:
+def cmd_serve(config: str | None, verbose: bool, mockaudio: bool = False) -> int:
     import uvicorn
 
     from .app import create_app
@@ -17,7 +17,7 @@ def cmd_serve(config: str | None, verbose: bool) -> int:
 
     setup_logging(verbose)
     cfg = load_config(config)
-    app = create_app(config)
+    app = create_app(config, mockaudio=mockaudio)
     uvicorn.run(
         app,
         host=str(cfg.get("server.host", "127.0.0.1")),
@@ -57,13 +57,16 @@ def main() -> None:
     )
     ap.add_argument("-c", "--config", default=None, help="path to config.toml")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--mockaudio", action="store_true",
+                    help="use the mock generator (sine tones) for pipeline "
+                         "testing — never for real listening")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("passwd", help="set the admin password")
     args = ap.parse_args()
 
     if args.cmd == "passwd":
         raise SystemExit(cmd_passwd(args.config))
-    raise SystemExit(cmd_serve(args.config, args.verbose))
+    raise SystemExit(cmd_serve(args.config, args.verbose, args.mockaudio))
 
 
 if __name__ == "__main__":
