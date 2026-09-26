@@ -25,7 +25,7 @@ from . import janitor, library
 from .config import Config, runtime_get
 from .db import DB
 from .generator.base import GenRequest, Generator
-from .util import iso, utcnow, wilson_score
+from .util import iso, parse_iso, utcnow, wilson_score
 
 log = logging.getLogger(__name__)
 
@@ -240,36 +240,58 @@ async def _commission_tick(rt) -> None:
     )["n"]
     min_library = runtime_get(rt.cfg, rt.db, "dj.min_library")
     want = min_library - (counts["ready"] + counts["generating"] + queued)
-    if want <= 0:
+
+    if want > 0:
+        for _ in range(min(want, 4)):  # cap the burst; runner executes serially
+            if not _commission_one(rt, counts["ready"], min_library):
+                break
         return
 
-    for _ in range(min(want, 4)):  # cap the burst; runner executes serially
-        if random.random() < runtime_get(rt.cfg, rt.db, "dj.variation_rate"):
-            parent = variation_parent(rt.db, rt.cfg)
-            if parent:
-                prompt = thompson_prompt(rt.db, exclude_prompt_id=parent["prompt_id"])
-                prompt_id = prompt["id"] if prompt else parent["prompt_id"]
-                dup = rt.db.one(
-                    "SELECT 1 FROM tracks WHERE parent_track_id = ? AND prompt_id = ?"
-                    " AND status != 'deleted'", (parent["id"], prompt_id))
-                if not dup:
-                    enqueue_job(rt.db, prompt_id=prompt_id,
-                                parent_track_id=parent["id"])
-                    log.info("commissioned variation of track %s (%s) in style %s",
-                             parent["id"], parent["title"],
-                             prompt["name"] if prompt else "(same style)")
-                    continue
+    # Above the minimum: an infinite radio keeps producing fresh music at a
+    # steady cadence anyway — the disk quota (with played-track eviction) is
+    # the real throttle, not the library size.
+    cadence = runtime_get(rt.cfg, rt.db, "dj.generate_every_minutes")
+    if cadence <= 0:
+        return
+    if rt.db.one("SELECT id FROM generation_jobs WHERE status IN ('queued', 'running')"):
+        return
+    last = rt.db.one(
+        "SELECT finished_at FROM generation_jobs WHERE status = 'done'"
+        " ORDER BY id DESC LIMIT 1"
+    )
+    if last and parse_iso(last["finished_at"]) > utcnow() - timedelta(minutes=cadence):
+        return
+    _commission_one(rt, counts["ready"], min_library)
 
-        prompt = thompson_prompt(rt.db)
-        if prompt:
-            enqueue_job(rt.db, prompt_id=prompt["id"])
-            log.info("commissioned new track with prompt %r (library %d/%d)",
-                     prompt["name"], counts["ready"], min_library)
-        else:
-            if counts["ready"] + counts["generating"] == 0:
-                log.warning("library empty but no enabled prompts exist — "
-                            "add prompts in the admin panel or set prompts.seed_dir")
-            break
+
+def _commission_one(rt, ready_count: int, min_library: int) -> bool:
+    """Enqueue one job: a variation of a proven track, or a fresh prompt."""
+    if random.random() < runtime_get(rt.cfg, rt.db, "dj.variation_rate"):
+        parent = variation_parent(rt.db, rt.cfg)
+        if parent:
+            prompt = thompson_prompt(rt.db, exclude_prompt_id=parent["prompt_id"])
+            prompt_id = prompt["id"] if prompt else parent["prompt_id"]
+            dup = rt.db.one(
+                "SELECT 1 FROM tracks WHERE parent_track_id = ? AND prompt_id = ?"
+                " AND status != 'deleted'", (parent["id"], prompt_id))
+            if not dup:
+                enqueue_job(rt.db, prompt_id=prompt_id,
+                            parent_track_id=parent["id"])
+                log.info("commissioned variation of track %s (%s) in style %s",
+                         parent["id"], parent["title"],
+                         prompt["name"] if prompt else "(same style)")
+                return True
+
+    prompt = thompson_prompt(rt.db)
+    if prompt:
+        enqueue_job(rt.db, prompt_id=prompt["id"])
+        log.info("commissioned new track with prompt %r (library %d/%d)",
+                 prompt["name"], ready_count, min_library)
+        return True
+    if ready_count == 0:
+        log.warning("library empty but no enabled prompts exist — "
+                    "add prompts in the admin panel or set prompts.seed_dir")
+    return False
 
 
 async def commission_loop(rt) -> None:

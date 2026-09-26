@@ -69,6 +69,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "dj": {
         "min_library": 8,
+        "generate_every_minutes": 15,
         "repeat_window_tracks": 25,
         "repeat_window_hours": 6.0,
         "new_track_share": 0.35,
@@ -87,6 +88,9 @@ DEFAULTS: dict[str, Any] = {
 # key -> (default, cast, human label, help) — editable from the admin panel.
 RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
     "dj.min_library": (8, int, "Minimum library size", "Commission new music whenever fewer ready tracks than this exist"),
+    "dj.generate_every_minutes": (15, int, "Generation cadence (minutes)",
+                                   "Keep generating fresh music at this interval while under the disk "
+                                   "quota, even above the minimum library size (0 = only fill up to the minimum)"),
     "dj.repeat_window_tracks": (25, int, "Repeat window (tracks)", "Do not play a track again within the last N aired tracks"),
     "dj.repeat_window_hours": (6.0, float, "Repeat window (hours)", "Do not play a track again within N hours"),
     "dj.new_track_share": (0.35, float, "New track share", "Fraction of picks reserved for never-played tracks (exploration)"),
