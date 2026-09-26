@@ -106,7 +106,9 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
     try:
         backend = resolve_backend(cfg, mockaudio)
         _check_playout_viable(cfg, backend)
-    except StartupError as exc:
+        from .util import lock_data_dir
+        lock_data_dir(cfg.path("library.data_dir"))
+    except (StartupError, RuntimeError) as exc:
         log.error("startup failed: %s", exc)
         raise SystemExit(2) from None
 

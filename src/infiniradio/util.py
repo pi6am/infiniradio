@@ -1,10 +1,11 @@
-"""Small shared helpers: time, logging, math, formatting."""
+"""Small shared helpers: time, logging, math, formatting, locking."""
 
 from __future__ import annotations
 
 import logging
 import math
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 # All timestamps in the database are naive UTC ISO-8601 strings with fixed
 # precision, which makes them lexicographically sortable.
@@ -66,3 +67,36 @@ def setup_logging(verbose: bool = False) -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def lock_data_dir(data_dir: Path) -> None:
+    """Take an exclusive, process-lifetime lock on the data directory.
+
+    Two servers sharing one data dir fight over the SQLite DB, the HLS
+    playlist and the feeder timeline in confusing ways; refuse to start
+    instead. Best effort on platforms without a usable lock API.
+    """
+    import os
+    import sys
+
+    lock_path = data_dir / "infiniradio.lock"
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError as exc:
+        logging.getLogger(__name__).warning("cannot create lock file %s: %s", lock_path, exc)
+        return
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, OSError) as exc:
+        raise RuntimeError(
+            f"another infiniradio instance is already using {data_dir} "
+            "(delete infiniradio.lock only if you are certain none is running)"
+        ) from exc
+    # Deliberately keep fd open (and the module-level reference alive) for
+    # the lifetime of the process: the lock releases when we exit.
+    globals()["_lock_fd"] = fd

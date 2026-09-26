@@ -95,7 +95,7 @@ def now_playing(db: DB, cfg, listener_id: str, at_ms: float | None = None,
             "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset, t.*"
             " FROM play_log p JOIN tracks t ON t.id = p.track_id"
             " WHERE p.epoch = ? AND p.prog_offset IS NOT NULL"
-            " AND p.prog_offset <= ?"
+            " AND p.prog_offset <= ? AND t.status != 'deleted'"
             " ORDER BY p.prog_offset DESC LIMIT 10",
             (encoder.epoch, prog_at),
         )
@@ -110,7 +110,8 @@ def now_playing(db: DB, cfg, listener_id: str, at_ms: float | None = None,
         rows = db.query(
             "SELECT p.started_at AS airtime, t.* FROM play_log p"
             " JOIN tracks t ON t.id = p.track_id"
-            " WHERE p.started_at <= ? ORDER BY p.started_at DESC LIMIT 10",
+            " WHERE p.started_at <= ? AND t.status != 'deleted'"
+            " ORDER BY p.started_at DESC LIMIT 10",
             (t,),
         )
         current = None
