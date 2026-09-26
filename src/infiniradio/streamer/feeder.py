@@ -178,7 +178,11 @@ class Feeder:
                 # Listeners start hearing this track one listener-lag after
                 # we write its first samples (players trail the live edge).
                 airtime = iso(utcnow() + timedelta(seconds=self._listener_lag()))
-                library.mark_aired(self.rt.db, track["id"], airtime)
+                library.mark_aired(
+                    self.rt.db, track["id"], airtime,
+                    prog_offset=self.encoder.program_seconds(),
+                    epoch=self.encoder.epoch,
+                )
                 log.info("airing track %s (%s) — audible from %s",
                          track["id"], track["title"], airtime)
                 first = False

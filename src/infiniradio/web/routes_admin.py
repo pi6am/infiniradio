@@ -121,8 +121,10 @@ async def dashboard(request: Request):
         " COALESCE(SUM(protected = 1 AND status = 'ready'), 0) AS protected FROM tracks"
     )
     gen_status = await rt.generator.status() if rt.generator else {"backend": "off", "ok": None}
-    jobs = db.query("SELECT j.*, p.name AS prompt_name FROM generation_jobs j"
+    jobs = db.query("SELECT j.*, p.name AS prompt_name, pt.title AS parent_title"
+                    " FROM generation_jobs j"
                     " LEFT JOIN prompts p ON p.id = j.prompt_id"
+                    " LEFT JOIN tracks pt ON pt.id = j.parent_track_id"
                     " ORDER BY j.id DESC LIMIT 12")
     for j in jobs:
         j["age"] = j["created_at"]

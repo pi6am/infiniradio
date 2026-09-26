@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}admin — track {{ t.id }}{% endblock %}
 {% block content %}
+<p style="margin:0 0 12px"><a href="/admin/library">← back to library</a></p>
 <div class="card">
   <h2 style="margin-top:0">track {{ t.id }} · {{ t.status }}
     {% if t.protected %}<span class="pill ok">protected</span>{% endif %}

@@ -5,7 +5,7 @@
 {% if np.current %}
 <div class="card">
   <h2 style="margin-top:0">on air</h2>
-  <b>{{ np.current.title }}</b>
+  <b><a href="/admin/track/{{ np.current.id }}">{{ np.current.title }}</a></b>
   <span class="muted">· {{ np.current.prompt }} · aired {{ np.current.airtime }} UTC
     · feeder: {% if feeder_track %}writing “{{ feeder_track }}” ({{ queued_s }}s queued){% else %}idle{% endif %}</span>
   <form method="post" action="/admin/skip" class="inline" style="margin-left:12px">
@@ -48,8 +48,8 @@
 <div class="grid">
   <div class="card stat">
     <h2 style="margin-top:0">library</h2>
-    <div class="big">{{ stats.ready }} <span class="muted" style="font-size:14px">ready</span></div>
-    <div class="muted">{{ stats.generating }} generating · {{ stats.failed }} failed ·
+    <div class="big"><a href="/admin/library" style="color:inherit;text-decoration:none">{{ stats.ready }}</a> <span class="muted" style="font-size:14px">ready</span></div>
+    <div class="muted"><a href="/admin/library?status=generating" style="color:inherit">{{ stats.generating }} generating</a> · {{ stats.failed }} failed ·
       {{ stats.protected }} protected · {{ stats.deleted }} deleted</div>
   </div>
   <div class="card stat">
@@ -86,14 +86,15 @@
     </form>
   </div>
   <table>
-    <tr><th>id</th><th>kind</th><th>prompt</th><th>status</th><th>error</th><th>created</th></tr>
+    <tr><th>id</th><th>kind</th><th>prompt</th><th>track</th><th>status</th><th>error</th><th>created</th></tr>
     {% for j in jobs %}
     <tr>
       <td>{{ j.id }}</td>
-      <td>{% if j.parent_track_id %}variation of {{ j.parent_title }}{% else %}new{% endif %}</td>
+      <td>{% if j.parent_track_id %}variation of <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>{% else %}new{% endif %}</td>
       <td>{{ j.prompt_name or j.style_override or '—' }}</td>
+      <td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td>
       <td><span class="pill {% if j.status == 'done' %}ok{% elif j.status in ('failed', 'cancelled') %}err{% endif %}">{{ j.status }}</span></td>
-      <td class="muted" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ j.error or '' }}</td>
+      <td class="muted" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ j.error or '' }}">{{ j.error or '' }}</td>
       <td class="muted">{{ j.created_at }}</td>
     </tr>
     {% endfor %}
@@ -101,5 +102,6 @@
 </div>
 
 <p class="muted">uptime {{ (uptime_s / 3600) | round(1) }} h ·
-  <a class="btn" href="/admin/generate">generate now…</a></p>
+  <a class="btn" href="/admin/generate">generate now…</a> ·
+  <a class="btn" href="/admin/jobs">all jobs →</a></p>
 {% endblock %}

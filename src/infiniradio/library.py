@@ -188,8 +188,10 @@ def apply_vote(db: DB, cfg: Config, track_id: int, listener_id: str, value: int)
     return db.one("SELECT * FROM tracks WHERE id = ?", (track_id,)) or {}
 
 
-def mark_aired(db: DB, track_id: int, airtime_iso: str) -> None:
-    db.execute("INSERT INTO play_log (track_id, started_at) VALUES (?, ?)", (track_id, airtime_iso))
+def mark_aired(db: DB, track_id: int, airtime_iso: str,
+               prog_offset: float | None = None, epoch: int | None = None) -> None:
+    db.execute("INSERT INTO play_log (track_id, started_at, prog_offset, epoch)"
+               " VALUES (?, ?, ?, ?)", (track_id, airtime_iso, prog_offset, epoch))
     db.execute(
         "UPDATE tracks SET play_count = play_count + 1, last_played_at = ? WHERE id = ?",
         (airtime_iso, track_id),

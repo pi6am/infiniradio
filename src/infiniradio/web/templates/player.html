@@ -17,12 +17,59 @@
 (function () {
   const audio = document.getElementById('audio');
   const src = '/live/live.m3u8';
+  let hls = null;
+
+  // --- exact now-playing sync ----------------------------------------------
+  // The playlist carries EXT-X-PROGRAM-DATE-TIME (server clock + program
+  // position). We anchor on each fragment we play and interpolate at 1x, so
+  // "at" is our position on the server's timeline. Clock skew never enters:
+  // the client clock only measures *elapsed* time.
+  let anchor = null;          // {pdt, at}
+  let lastRefresh = 0;
+
+  function playingPdt() {
+    if (!anchor) return null;
+    const v = anchor.pdt + (Date.now() - anchor.at);
+    return Number.isFinite(v) ? Math.round(v) : null;
+  }
+  window.__npAt = playingPdt;   // used by vote buttons (hx-vals) to stay synced
+
+  function refreshCard(force) {
+    const card = document.getElementById('np-card');
+    if (!card) return;
+    const now = Date.now();
+    if (!force && now - lastRefresh < 2000) return;
+    lastRefresh = now;
+    const at = playingPdt();
+    fetch('/nowplaying-card' + (at ? ('?at=' + at) : ''))
+      .then(r => r.text())
+      .then(html => {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        const fresh = tmp.querySelector('#np-card');
+        if (fresh) card.replaceWith(fresh);
+      })
+      .catch(() => {});
+  }
+  setInterval(() => refreshCard(false), 5000);
+
+  function onFrag(frag) {
+    if (frag && frag.programDateTime) {
+      anchor = { pdt: frag.programDateTime, at: Date.now() };
+      refreshCard(true);
+    } else {
+      anchor = null;   // no timeline info -> server falls back to wall clock
+    }
+  }
+
+  // --- stream setup ----------------------------------------------------------
   if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-    audio.src = src;                       // Safari / native HLS
+    audio.src = src;                       // Safari / native HLS (no PDT access)
   } else if (window.Hls && Hls.isSupported()) {
-    const hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20 });
+    hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20 });
     hls.loadSource(src);
     hls.attachMedia(audio);
+    hls.on(Hls.Events.FRAG_CHANGED, function (_e, data) { onFrag(data && data.frag); });
     hls.on(Hls.Events.ERROR, function (_e, data) {
       if (data.fatal) setTimeout(function () { hls.startLoad(); }, 2000);
     });

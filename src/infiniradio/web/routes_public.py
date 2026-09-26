@@ -8,7 +8,7 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from .. import library
@@ -62,30 +62,65 @@ def track_public(row: dict, prompts: dict[int, str], my: dict[int, int]) -> dict
     }
 
 
-def now_playing(db: DB, cfg, listener_id: str) -> dict:
-    # play_log airtimes already include the listener lag (scheduled by the
-    # feeder as write-time + stream.latency_hint), so "current" is simply the
-    # row covering the current wall-clock time. No second offset here.
-    t = iso(utcnow())
-    rows = db.query(
-        "SELECT p.started_at AS airtime, t.* FROM play_log p"
-        " JOIN tracks t ON t.id = p.track_id"
-        " WHERE p.started_at <= ? ORDER BY p.started_at DESC LIMIT 10",
-        (t,),
-    )
+def now_playing(db: DB, cfg, listener_id: str, at_ms: float | None = None,
+                encoder=None) -> dict:
+    """Current + recent tracks.
+
+    at_ms: the caller's position on the HLS EXT-X-PROGRAM-DATE-TIME timeline
+    (epoch ms, server clock domain). When given and the encoder exposes the
+    timeline, tracks are matched by exact program offset — frame-accurate
+    voting regardless of player buffering. Otherwise we fall back to wall
+    clock against scheduled airtimes (approximate).
+    """
     prompts = _prompt_names(db)
     my = library.my_votes(db, listener_id)
-    current = None
-    if rows:
-        r = rows[0]
-        end = parse_iso(r["airtime"]) + timedelta(seconds=r["duration_s"] or 1.0)
-        if end >= parse_iso(t):
-            current = track_public(r, prompts, my)
-            current["airtime"] = r["airtime"]
+
+    mode = "clock"
+    if (at_ms is not None and encoder is not None
+            and getattr(encoder, "started_wall", None) is not None):
+        try:
+            prog_at = at_ms / 1000.0 - encoder.started_wall.timestamp()
+            if abs(prog_at - encoder.program_seconds()) < 24 * 3600:
+                mode = "program"
+        except (TypeError, ValueError, OSError):
+            pass
+
+    if mode == "program":
+        rows = db.query(
+            "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset, t.*"
+            " FROM play_log p JOIN tracks t ON t.id = p.track_id"
+            " WHERE p.epoch = ? AND p.prog_offset IS NOT NULL"
+            " AND p.prog_offset <= ?"
+            " ORDER BY p.prog_offset DESC LIMIT 10",
+            (encoder.epoch, prog_at),
+        )
+        current = None
+        if rows:
+            r = rows[0]
+            if r["prog_offset"] + (r["duration_s"] or 1.0) > prog_at:
+                current = track_public(r, prompts, my)
+                current["airtime"] = r["airtime"]
+    else:
+        t = iso(utcnow())
+        rows = db.query(
+            "SELECT p.started_at AS airtime, t.* FROM play_log p"
+            " JOIN tracks t ON t.id = p.track_id"
+            " WHERE p.started_at <= ? ORDER BY p.started_at DESC LIMIT 10",
+            (t,),
+        )
+        current = None
+        if rows:
+            r = rows[0]
+            end = parse_iso(r["airtime"]) + timedelta(seconds=r["duration_s"] or 1.0)
+            if end >= parse_iso(t):
+                current = track_public(r, prompts, my)
+                current["airtime"] = r["airtime"]
+
     recent = [track_public(r, prompts, my) | {"airtime": r["airtime"]} for r in rows]
     return {
         "server_time": iso(utcnow()),
         "latency_hint": float(cfg.get("stream.latency_hint", 20.0)),
+        "sync": mode,
         "current": current,
         "recent": recent,
     }
@@ -129,13 +164,17 @@ async def player(request: Request):
     listener = ensure_listener(request)
     ctx = {
         "request": request,
-        "np": now_playing(rt.db, rt.cfg, listener[0]),
+        "np": now_playing(rt.db, rt.cfg, listener[0], encoder=_encoder(rt)),
         "station": station_info(rt),
     }
     resp = request.app.state.templates.TemplateResponse(request, "player.html", ctx)
     if listener[1]:
         _set_cookie(resp, listener[1])
     return resp
+
+
+def _encoder(rt):
+    return rt.feeder.encoder if rt.feeder else None
 
 
 def station_info(rt) -> dict:
@@ -158,12 +197,13 @@ def station_info(rt) -> dict:
 # ------------------------------------------------------------------ fragments
 
 @router.get("/nowplaying-card", response_class=HTMLResponse)
-async def nowplaying_card(request: Request):
+async def nowplaying_card(request: Request, at: float | None = None):
     rt = request.app.state.rt
     listener = ensure_listener(request)
     resp = request.app.state.templates.TemplateResponse(
         request, "_nowplaying.html",
-        {"request": request, "np": now_playing(rt.db, rt.cfg, listener[0])},
+        {"request": request,
+         "np": now_playing(rt.db, rt.cfg, listener[0], at_ms=at, encoder=_encoder(rt))},
     )
     if listener[1]:
         _set_cookie(resp, listener[1])
@@ -171,13 +211,15 @@ async def nowplaying_card(request: Request):
 
 
 @router.post("/vote/{track_id}/{value}", response_class=HTMLResponse)
-async def vote_fragment(request: Request, track_id: int, value: int):
+async def vote_fragment(request: Request, track_id: int, value: int,
+                        at: float | None = Form(None)):
     rt = request.app.state.rt
     listener = ensure_listener(request)
     _apply_vote(rt, request, track_id, value, listener)
     resp = request.app.state.templates.TemplateResponse(
         request, "_nowplaying.html",
-        {"request": request, "np": now_playing(rt.db, rt.cfg, listener[0])},
+        {"request": request,
+         "np": now_playing(rt.db, rt.cfg, listener[0], at_ms=at, encoder=_encoder(rt))},
     )
     if listener[1]:
         _set_cookie(resp, listener[1])
@@ -187,10 +229,10 @@ async def vote_fragment(request: Request, track_id: int, value: int):
 # ------------------------------------------------------------------ JSON API
 
 @router.get("/api/nowplaying")
-async def api_nowplaying(request: Request):
+async def api_nowplaying(request: Request, at: float | None = None):
     rt = request.app.state.rt
     listener = ensure_listener(request)
-    data = now_playing(rt.db, rt.cfg, listener[0])
+    data = now_playing(rt.db, rt.cfg, listener[0], at_ms=at, encoder=_encoder(rt))
     resp = JSONResponse(data)
     if listener[1]:
         _set_cookie(resp, listener[1])

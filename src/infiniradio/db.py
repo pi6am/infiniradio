@@ -99,6 +99,12 @@ MIGRATIONS: dict[int, str] = {
       queued_at TEXT NOT NULL
     );
     """,
+    3: """
+    -- Frame-accurate now-playing: program offset of each airing within the
+    -- current encoder life, matching the HLS EXT-X-PROGRAM-DATE-TIME timeline.
+    ALTER TABLE play_log ADD COLUMN prog_offset REAL;
+    ALTER TABLE play_log ADD COLUMN epoch INTEGER;
+    """,
 }
 
 

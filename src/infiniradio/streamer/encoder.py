@@ -29,6 +29,8 @@ class Encoder:
         self.proc: asyncio.subprocess.Process | None = None
         self.started_at: float | None = None   # wall clock of process start
         self.total_bytes = 0                    # PCM bytes written this life
+        self.epoch = 0                          # increments on every start()
+        self.started_wall = None                # utcnow() at process start
         self._stderr_task: asyncio.Task | None = None
 
     @property
@@ -45,7 +47,7 @@ class Encoder:
             "-f", "hls",
             "-hls_time", str(int(c.get("stream.segment_seconds", 6))),
             "-hls_list_size", str(int(c.get("stream.playlist_segments", 5))),
-            "-hls_flags", "+delete_segments+append_list+omit_endlist+independent_segments",
+            "-hls_flags", "+delete_segments+append_list+omit_endlist+independent_segments+program_date_time",
             "-hls_segment_type", "fmp4",
             "-hls_fmp4_init_filename", "init.mp4",
             "-hls_segment_filename", str(self.hls_dir / "seg%06d.m4s"),
@@ -56,6 +58,7 @@ class Encoder:
         self.hls_dir.mkdir(parents=True, exist_ok=True)
         if self.proc and self.proc.returncode is None:
             return
+        from datetime import datetime, timezone
         self.proc = await asyncio.create_subprocess_exec(
             *self._args(),
             stdin=asyncio.subprocess.PIPE,
@@ -64,8 +67,15 @@ class Encoder:
         )
         self.started_at = time.monotonic()
         self.total_bytes = 0
+        self.epoch += 1
+        self.started_wall = datetime.now(timezone.utc).replace(tzinfo=None)
         self._stderr_task = asyncio.create_task(self._drain_stderr())
-        log.info("HLS encoder started (pid %s)", self.proc.pid)
+        log.info("HLS encoder started (pid %s, epoch %d)", self.proc.pid, self.epoch)
+
+    def program_seconds(self) -> float:
+        """Seconds of program written this encoder life (== the HLS timeline,
+        since EXT-X-PROGRAM-DATE-TIME = started_wall + program position)."""
+        return self.total_bytes / self.bytes_per_second
 
     async def _drain_stderr(self) -> None:
         assert self.proc and self.proc.stderr

@@ -17,12 +17,19 @@
   }
   header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 20px; border-bottom: 1px solid var(--border);
+    padding: 10px 20px; border-bottom: 1px solid var(--border); gap: 12px;
+    flex-wrap: wrap;
   }
   .brand { font-weight: 700; font-size: 1.1rem; color: var(--text); text-decoration: none; }
   .brand span { color: var(--accent); }
-  nav a { color: var(--muted); text-decoration: none; margin-left: 16px; }
-  nav a:hover { color: var(--text); }
+  nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  nav a {
+    color: var(--muted); text-decoration: none; padding: 5px 11px;
+    border-radius: 7px; font-size: 14px;
+  }
+  nav a:hover { color: var(--text); background: var(--panel2); }
+  nav a.active { color: var(--accent); background: var(--panel2); }
+  nav form { display: inline; margin-left: 8px; }
   main { max-width: 860px; margin: 24px auto 60px; padding: 0 16px; }
   .card {
     background: var(--panel); border: 1px solid var(--border);
@@ -74,10 +81,20 @@
 <body>
 <header>
   <a class="brand" href="/">∞<span>infiniradio</span></a>
+  {% set path = request.url.path %}
+  {% if path.startswith('/admin') and 'login' not in path %}
   <nav>
-    <a href="/">listen</a>
-    {% if request.url.path.startswith('/admin') %}<a href="/admin">dashboard</a>{% endif %}
+    <a href="/admin/" class="{{ 'active' if path in ('/admin', '/admin/') }}">dashboard</a>
+    <a href="/admin/library" class="{{ 'active' if path.startswith('/admin/library') or path.startswith('/admin/track') }}">library</a>
+    <a href="/admin/generate" class="{{ 'active' if path.startswith('/admin/generate') }}">generate</a>
+    <a href="/admin/jobs" class="{{ 'active' if path.startswith('/admin/jobs') }}">jobs</a>
+    <a href="/admin/prompts" class="{{ 'active' if path.startswith('/admin/prompts') }}">prompts</a>
+    <a href="/admin/settings" class="{{ 'active' if path.startswith('/admin/settings') }}">settings</a>
+    <form method="post" action="/admin/logout"><button type="submit">log out</button></form>
   </nav>
+  {% else %}
+  <nav><a href="/">player</a><a href="/admin">admin</a></nav>
+  {% endif %}
 </header>
 <main>
 {% block content %}{% endblock %}
