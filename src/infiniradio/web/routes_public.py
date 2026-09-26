@@ -79,8 +79,12 @@ def now_playing(db: DB, cfg, listener_id: str, at_ms: float | None = None,
     if (at_ms is not None and encoder is not None
             and getattr(encoder, "started_wall", None) is not None):
         try:
-            prog_at = at_ms / 1000.0 - encoder.started_wall.timestamp()
-            if abs(prog_at - encoder.program_seconds()) < 24 * 3600:
+            # started_wall is naive UTC; timestamp() would read it as local
+            # time, so attach UTC explicitly before converting to epoch.
+            from datetime import timezone as _tz
+            start_epoch = encoder.started_wall.replace(tzinfo=_tz.utc).timestamp()
+            prog_at = at_ms / 1000.0 - start_epoch
+            if abs(prog_at - encoder.program_seconds()) < 6 * 3600:
                 mode = "program"
         except (TypeError, ValueError, OSError):
             pass
