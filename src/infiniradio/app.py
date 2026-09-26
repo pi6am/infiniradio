@@ -78,17 +78,40 @@ def make_generator(cfg: Config, backend: str) -> Generator | None:
     return None  # 'off'
 
 
+def _check_playout_viable(cfg: Config, backend: str) -> None:
+    """A station with no generator needs an existing library; otherwise it
+    could only ever broadcast silence."""
+    if backend != "off":
+        return
+    db = DB(cfg.path("library.data_dir") / "infiniradio.db")
+    try:
+        ready = db.one("SELECT COUNT(*) AS n FROM tracks WHERE status = 'ready'")["n"]
+    finally:
+        db.conn.close()
+    if ready == 0:
+        raise StartupError(
+            "no generator backend configured and the library is empty — set "
+            '[generator] backend = "comfyui" (plus [comfyui] url) in config.toml, '
+            "or run with --mockaudio for testing"
+        )
+    log.warning("no generator backend configured — airing the existing library "
+                "(%d ready track(s)); no new music will be generated", ready)
+
+
 def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -> FastAPI:
     cfg = load_config(config_path)
 
+    # Validate before uvicorn starts so misconfiguration ends in a single
+    # clean error line and a non-zero exit code, not a lifespan traceback.
+    try:
+        backend = resolve_backend(cfg, mockaudio)
+        _check_playout_viable(cfg, backend)
+    except StartupError as exc:
+        log.error("startup failed: %s", exc)
+        raise SystemExit(2) from None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        try:
-            backend = resolve_backend(cfg, mockaudio)
-        except StartupError as exc:
-            log.error("startup failed: %s", exc)
-            raise RuntimeError(str(exc)) from exc
-
         data_dir = cfg.path("library.data_dir")
         (data_dir / "music").mkdir(parents=True, exist_ok=True)
         (data_dir / "hls").mkdir(parents=True, exist_ok=True)
@@ -96,23 +119,6 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
         library.import_prompts(db, cfg)
 
         generator = make_generator(cfg, backend)
-        if generator is None:
-            # No generation configured. That is only viable if there is an
-            # existing library to broadcast; otherwise the station could air
-            # nothing but silence forever, so refuse to start.
-            ready = db.one(
-                "SELECT COUNT(*) AS n FROM tracks WHERE status = 'ready'"
-            )["n"]
-            if ready == 0:
-                msg = ("no generator backend configured and the library is empty — "
-                       'set [generator] backend = "comfyui" (plus [comfyui] url) in '
-                       "config.toml, or run with --mockaudio for testing")
-                log.error("startup failed: %s", msg)
-                raise RuntimeError(msg)
-            log.warning(
-                "no generator backend configured — airing the existing library "
-                "(%d ready track(s)); no new music will be generated", ready)
-
         app.state.sessions = auth.Sessions(auth.get_server_secret(db, cfg))
 
         from .streamer.feeder import Feeder  # deferred import (avoids cycles)
