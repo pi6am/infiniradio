@@ -47,7 +47,12 @@
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
         const fresh = tmp.querySelector('#np-card');
-        if (fresh) card.replaceWith(fresh);
+        if (fresh) {
+          card.replaceWith(fresh);
+          // We inserted this outside htmx, so htmx has not bound the new
+          // vote buttons — without this they are inert after every refresh.
+          if (window.htmx) window.htmx.process(fresh);
+        }
       })
       .catch(() => {});
   }
