@@ -28,6 +28,10 @@
       <td class="muted">{{ t.size_fmt }}</td>
       <td class="muted">{{ t.last_played_at or 'never' }}</td>
       <td>
+        <form class="inline" method="post" action="/admin/track/{{ t.id }}/queue_next">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" title="air this track next">▶ next</button>
+        </form>
         <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <button type="submit">delete</button>

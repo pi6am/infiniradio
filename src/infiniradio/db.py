@@ -92,6 +92,13 @@ MIGRATIONS: dict[int, str] = {
       value TEXT NOT NULL
     );
     """,
+    2: """
+    CREATE TABLE play_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      queued_at TEXT NOT NULL
+    );
+    """,
 }
 
 

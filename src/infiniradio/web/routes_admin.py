@@ -3,6 +3,7 @@ Jinja2 + htmx-free plain forms (full page submissions) to keep it simple."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -133,11 +134,17 @@ async def dashboard(request: Request):
             feeder_track = row["title"]
 
     np = now_playing(db, cfg, "admin")
+    queue = db.query(
+        "SELECT q.id AS qid, q.queued_at, t.id AS track_id, t.title, t.duration_s,"
+        " p.name AS prompt_name FROM play_queue q"
+        " JOIN tracks t ON t.id = q.track_id"
+        " LEFT JOIN prompts p ON p.id = t.prompt_id ORDER BY q.id"
+    )
     return request.app.state.templates.TemplateResponse(
         request, "admin/dashboard.html",
         _ctx(request,
              np=np, quota=quota, stats=stats, gen=gen_status, jobs=jobs,
-             feeder_track=feeder_track,
+             feeder_track=feeder_track, queue=queue,
              queued_s=round(rt.feeder.encoder.queued_seconds(), 1) if rt.feeder else 0,
              uptime_s=int((utcnow() - rt.started).total_seconds()),
              usage_fmt=human_bytes(quota["usage"]), quota_fmt=human_bytes(quota["quota"])))
@@ -210,16 +217,64 @@ async def track_protect(request: Request, track_id: int, csrf: str = Form("")):
     return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
 
 
+@router.post("/track/{track_id}/queue_next")
+async def track_queue_next(request: Request, track_id: int, csrf: str = Form("")):
+    """Manually override the DJ: air this track next."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    row = rt.db.one("SELECT id FROM tracks WHERE id = ? AND status = 'ready'", (track_id,))
+    if not row:
+        return PlainTextResponse("track is not ready", status_code=400)
+    rt.db.execute("INSERT INTO play_queue (track_id, queued_at) VALUES (?, ?)",
+                  (track_id, iso(utcnow())))
+    return RedirectResponse(_back(request, "/admin/library"), status_code=303)
+
+
+@router.post("/queue/{qid}/remove")
+async def queue_remove(request: Request, qid: int, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    rt.db.execute("DELETE FROM play_queue WHERE id = ?", (qid,))
+    return RedirectResponse(_back(request, "/admin"), status_code=303)
+
+
+@router.post("/skip")
+async def skip_current(request: Request, csrf: str = Form("")):
+    """Stop feeding the current track and flush the buffered audio."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    if rt.feeder and rt.feeder.request_skip():
+        log.info("skip requested from admin panel")
+    return RedirectResponse(_back(request, "/admin"), status_code=303)
+
+
+def _back(request: Request, default: str) -> str:
+    ref = request.headers.get("referer") or ""
+    return ref if ref.startswith("/") or ref.startswith(str(request.base_url)) else default
+
+
 @router.post("/track/{track_id}/delete")
 async def track_delete(request: Request, track_id: int, csrf: str = Form("")):
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    active = rt.feeder.active_ids if rt.feeder else set()
-    if track_id in active:
-        return PlainTextResponse("cannot delete: currently airing", status_code=409)
+    # Never queued again, regardless of what follows.
+    rt.db.execute("DELETE FROM play_queue WHERE track_id = ?", (track_id,))
+    feeder = rt.feeder
+    if feeder and track_id in feeder.active_ids:
+        # The track is being fed right now: skip it out of the buffer first
+        # (the decoder may hold the playout file open, which also blocks
+        # deletion on Windows), then remove the files.
+        feeder.request_skip()
+        for _ in range(150):  # up to ~15s
+            if track_id not in feeder.active_ids:
+                break
+            await asyncio.sleep(0.1)
     library.delete_track(rt.db, rt.cfg, track_id)
-    return RedirectResponse("/admin/library", status_code=303)
+    return RedirectResponse(_back(request, "/admin/library"), status_code=303)
 
 
 @router.post("/track/{track_id}/rename")

@@ -39,6 +39,7 @@ class Feeder:
         self.cfg: Config = rt.cfg
         self.encoder = Encoder(rt.cfg, rt.cfg.path("library.data_dir") / "hls")
         self.current_track_id: int | None = None
+        self.skip_requested = False
         self._silence_since: float | None = None
 
     @property
@@ -48,17 +49,54 @@ class Feeder:
             ids.add(self.current_track_id)
         return ids
 
+    # -- manual queue & skip -------------------------------------------------
+
+    def _pop_queue(self) -> dict | None:
+        """Oldest manually queued playable track (drops stale entries)."""
+        while True:
+            row = self.rt.db.one(
+                "SELECT q.id AS qid, t.* FROM play_queue q"
+                " JOIN tracks t ON t.id = q.track_id ORDER BY q.id LIMIT 1"
+            )
+            if row is None:
+                return None
+            self.rt.db.execute("DELETE FROM play_queue WHERE id = ?", (row["qid"],))
+            if row["status"] == "ready" and row["playout_path"]:
+                return row
+            log.info("dropping stale queue entry for track %s (status %s)",
+                     row["id"], row["status"])
+
+    def queued_ids(self) -> set[int]:
+        return {r["track_id"] for r in self.rt.db.query("SELECT track_id FROM play_queue")}
+
+    def request_skip(self) -> bool:
+        """Skip the track currently being fed (flushes buffered audio)."""
+        if self.current_track_id is None:
+            return False
+        self.skip_requested = True
+        return True
+
+    # ------------------------------------------------------------------------
+
     async def run(self) -> None:
         await self.encoder.start()
         log.info("feeder running; live playlist at %s", self.encoder.hls_dir / "live.m3u8")
         while True:
             try:
-                track = dj.pick_next(self.rt.db, self.cfg, exclude_ids=self.active_ids)
+                track = self._pop_queue() or dj.pick_next(
+                    self.rt.db, self.cfg,
+                    exclude_ids=self.active_ids | self.queued_ids(),
+                )
                 if track is None:
                     await self._feed_silence()
                     continue
                 self._silence_since = None
-                await self._feed_track(track)
+                skipped = await self._feed_track(track)
+                if skipped:
+                    # Flush everything already buffered of the skipped track
+                    # by restarting the encoder (players resync in seconds).
+                    log.info("flushing buffer after skip (encoder restart)")
+                    await self.encoder.restart()
             except EncoderDied:
                 await self.encoder.restart()
             except asyncio.CancelledError:
@@ -109,7 +147,12 @@ class Feeder:
         )
         assert proc.stdout is not None
         first = True
+        skipped = False
         while True:
+            if self.skip_requested:
+                self.skip_requested = False
+                skipped = True
+                break
             chunk = await proc.stdout.read(CHUNK)
             if not chunk:
                 break
@@ -124,11 +167,16 @@ class Feeder:
                 first = False
             await self._pace()
             await self.encoder.write(chunk)
+        if skipped:
+            proc.terminate()
         _, err = await proc.communicate()
-        if proc.returncode != 0:
+        if not skipped and proc.returncode != 0:
             log.error("decode failed for track %s: %s", track["id"],
                       err.decode(errors="replace").strip())
         self.current_track_id = None
+        if skipped:
+            log.info("skipped track %s (%s)", track["id"], track["title"])
+        return skipped
 
     async def stop(self) -> None:
         await self.encoder.stop()

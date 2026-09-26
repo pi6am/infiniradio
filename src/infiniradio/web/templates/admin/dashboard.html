@@ -8,10 +8,42 @@
   <b>{{ np.current.title }}</b>
   <span class="muted">· {{ np.current.prompt }} · aired {{ np.current.airtime }} UTC
     · feeder: {% if feeder_track %}writing “{{ feeder_track }}” ({{ queued_s }}s queued){% else %}idle{% endif %}</span>
+  <form method="post" action="/admin/skip" class="inline" style="margin-left:12px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">⏭ skip current (flushes buffer)</button>
+  </form>
 </div>
 {% else %}
 <div class="card muted">nothing has aired yet (waiting for the first ready track)</div>
 {% endif %}
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">up next (manual queue)</h2>
+    <a class="btn" href="/admin/library?status=ready">queue a track from the library →</a>
+  </div>
+  {% if queue %}
+  <table>
+    <tr><th>order</th><th>title</th><th>prompt</th><th>queued</th><th></th></tr>
+    {% for q in queue %}
+    <tr>
+      <td class="muted">#{{ loop.index }}</td>
+      <td><a href="/admin/track/{{ q.track_id }}">{{ q.title }}</a></td>
+      <td class="muted">{{ q.prompt_name or 'custom' }}</td>
+      <td class="muted">{{ q.queued_at }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/queue/{{ q.qid }}/remove">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted" style="margin:6px 0 0">empty — the DJ chooses on its own</p>
+  {% endif %}
+</div>
 
 <div class="grid">
   <div class="card stat">

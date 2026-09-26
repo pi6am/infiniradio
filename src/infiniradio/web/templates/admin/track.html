@@ -31,14 +31,18 @@
     <tr><th>lyrics snapshot</th><td class="muted"><pre class="abc" style="max-height:160px">{{ t.lyrics_snapshot }}</pre></td></tr>
   </table>
 
-  <div style="margin-top:14px;display:flex;gap:8px">
+  <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+    <form class="inline" method="post" action="/admin/track/{{ t.id }}/queue_next">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">▶ air next</button>
+    </form>
     <form class="inline" method="post" action="/admin/track/{{ t.id }}/protect">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button type="submit">{% if t.protected %}unprotect{% else %}protect{% endif %}</button>
     </form>
     <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button type="submit">delete files</button>
+      <button type="submit">delete (skips if airing)</button>
     </form>
   </div>
 </div>
