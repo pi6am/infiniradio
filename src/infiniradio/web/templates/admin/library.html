@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}admin — library{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">library</h2>
+    <div>
+      {% for s in ['ready', 'generating', 'failed', 'deleted'] %}
+      <a class="btn" href="/admin/library?status={{ s }}"
+         style="{% if s == status %}border-color:var(--accent){% endif %}">{{ s }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <table>
+    <tr><th>id</th><th>title</th><th>prompt</th><th>dur</th><th>plays</th>
+        <th>votes</th><th>score</th><th>size</th><th>last aired</th><th></th></tr>
+    {% for t in tracks %}
+    <tr>
+      <td>{{ t.id }}</td>
+      <td><a href="/admin/track/{{ t.id }}">{{ t.title or '—' }}</a>
+        {% if t.is_variation %}<span class="pill">var</span>{% endif %}
+        {% if t.protected %}<span class="pill ok">protected</span>{% endif %}</td>
+      <td class="muted">{{ t.prompt_name }}</td>
+      <td class="muted">{{ t.duration_fmt }}</td>
+      <td class="muted">{{ t.play_count }}</td>
+      <td class="muted">▲{{ t.vote_up }} ▼{{ t.vote_down }}</td>
+      <td class="muted">{{ t.score }}</td>
+      <td class="muted">{{ t.size_fmt }}</td>
+      <td class="muted">{{ t.last_played_at or 'never' }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">delete</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" class="muted">no tracks with status “{{ status }}”</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

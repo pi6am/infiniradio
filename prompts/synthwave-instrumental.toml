@@ -1,0 +1,10 @@
+name = "synthwave-instrumental"
+style = "an instrumental synthwave track, layered complex melody, strong rhythm, harmonics, mellow and fast"
+song = """
+[Intro]
+
+[Instrumental]
+
+[Outro]
+"""
+cot = "full"

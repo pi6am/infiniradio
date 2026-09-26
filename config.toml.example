@@ -1,0 +1,86 @@
+# infiniradio configuration
+# Copy to config.toml and adjust. Environment overrides use double underscores:
+#   INFINIRADIO__COMFYUI__URL=http://gpu-box:8188
+# Runtime-tunable values (marked "runtime") can also be changed from the admin
+# panel; they are stored in the database and override this file.
+
+[server]
+host = "127.0.0.1"
+port = 8000
+# Used to sign session cookies. Auto-generated and persisted on first run.
+secret = ""
+
+[admin]
+username = "admin"
+# Set with:  python -m infiniradio passwd
+password_hash = ""
+
+[generator]
+# mock | comfyui | off
+#   mock    - synthesize sine-wave "songs" locally (no GPU, great for development)
+#   comfyui - submit the YuE2 workflow to a ComfyUI server
+#   off     - never generate (manage the library manually)
+backend = "mock"
+
+[comfyui]
+url = "http://127.0.0.1:8188"
+# ComfyUI workflow exported in API format. Values below are patched in at
+# submit time; the file itself is never modified.
+workflow = "workflow/infiniradio.json"
+# Audio format for the SaveAudioAdvanced node: flac | mp3
+audio_format = "flac"
+# Lame VBR quality label, used only when audio_format = "mp3"
+audio_quality = "V0"
+# Optional HTTP basic auth if your ComfyUI is behind a proxy
+username = ""
+password = ""
+poll_interval = 2.0
+request_timeout = 1800.0
+
+# Sidecar cleanup service (see sidecar/comfyui_cleanup.py), runs on the
+# ComfyUI machine and deletes already-ingested abc/audio files.
+cleanup_url = ""          # e.g. http://gpu-box:8765
+cleanup_token = ""
+cleanup_every_n = 1
+
+# Node IDs inside the workflow. Override these if graph edits shift IDs.
+[comfyui.workflow_vars]
+style = "33:36"
+lyrics = "33:37"
+seed = "33:34"
+plan = "33:31"            # boolean: generate a new ABC plan (true) or use supplied ABC
+abc = "33:32"             # supplied ABC text (used when plan = false)
+audio_save = "10"         # SaveAudioAdvanced node (format patched per audio_format)
+
+[library]
+data_dir = "data"         # database, music files and HLS segments live under here
+playout_bitrate = "192k"  # bitrate of the normalized playout copy
+loudness_target = -16.0   # LUFS target for playout normalization
+
+[stream]
+segment_seconds = 6
+playlist_segments = 5
+bitrate = "128k"          # HLS encoder bitrate (restart to apply)
+sample_rate = 48000
+latency_hint = 20.0       # approx. seconds between feeder and listeners' ears
+ffmpeg_path = "ffmpeg"
+ffprobe_path = "ffprobe"
+
+# ---- DJ tuning (bootstrap defaults; all runtime-editable in the admin panel) ----
+
+[dj]
+min_library = 8                # runtime: keep at least this many ready tracks
+repeat_window_tracks = 25      # runtime: don't repeat within the last N aired tracks
+repeat_window_hours = 6.0      # runtime: ... or within N hours
+new_track_share = 0.35         # runtime: fraction of picks reserved for never-played tracks
+variation_rate = 0.15          # runtime: chance a commissioned job is a variation
+variation_score_threshold = 0.6  # runtime: Wilson score a track needs to earn variations
+protect_threshold = 3          # runtime: net upvotes that auto-protect a track
+downvote_evict_net = -2        # runtime: net votes at or below this ...
+downvote_evict_plays = 2       # runtime: ... after this many plays evicts the track
+quota_gb = 50.0                # runtime: max disk used by music (generation pauses above)
+
+[prompts]
+# TOML files in this directory are imported into the prompt library on first
+# boot; afterwards the database is the source of truth (export from admin).
+seed_dir = "prompts"

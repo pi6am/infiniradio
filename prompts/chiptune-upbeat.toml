@@ -1,0 +1,10 @@
+name = "chiptune-upbeat"
+style = "an upbeat chiptune track, 8-bit square lead, arpeggiated bass, driving drums, playful and energetic"
+song = """
+[Intro]
+
+[Instrumental]
+
+[Outro]
+"""
+cot = "full"

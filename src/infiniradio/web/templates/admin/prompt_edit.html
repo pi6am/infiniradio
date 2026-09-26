@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}admin — prompt{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ 'edit prompt' if p else 'new prompt' }}</h2>
+  {% if error %}<p style="color:var(--bad)">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ action }}">
+    {% if p %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endif %}
+    <label>name</label>
+    <input type="text" name="name" value="{{ p.name if p else '' }}" required>
+
+    <label>style prompt — describes the music (genre, instruments, mood, tempo…)</label>
+    <textarea name="style" required>{{ p.style_text if p else '' }}</textarea>
+
+    <label>song prompt — structure markers and/or lyrics</label>
+    <textarea name="song">{{ p.song_text if p else '[Intro]\n\n[Instrumental]\n\n[Outro]' }}</textarea>
+
+    <label>planning mode (cot)</label>
+    <select name="cot">
+      {% for m in ['full', 'melody', 'off'] %}
+      <option value="{{ m }}" {% if p and p.cot_mode == m %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+
+    <label><input type="checkbox" name="enabled" value="true" style="width:auto"
+      {% if (p and p.enabled) or not p %}checked{% endif %}> enabled (available to the automatic DJ)</label>
+
+    <div style="margin-top:14px">
+      <button type="submit">save</button>
+      <a class="btn" href="/admin/prompts">cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

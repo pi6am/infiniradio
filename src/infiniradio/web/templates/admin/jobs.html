@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}admin — jobs{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">generation jobs</h2>
+  <table>
+    <tr><th>id</th><th>kind</th><th>prompt</th><th>track</th><th>seed</th>
+        <th>status</th><th>error</th><th>created</th><th>finished</th><th></th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{{ j.id }}</td>
+      <td>{% if j.parent_track_id %}variation of
+          <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>
+          {% else %}new{% endif %}</td>
+      <td>{{ j.prompt_name or '—' }}{% if j.style_override %} <span class="pill">custom style</span>{% endif %}</td>
+      <td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td>
+      <td class="muted">{{ j.seed or '—' }}</td>
+      <td><span class="pill {% if j.status == 'done' %}ok{% elif j.status in ('failed', 'cancelled') %}err{% endif %}">{{ j.status }}</span></td>
+      <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title="{{ j.error or '' }}">{{ j.error or '' }}</td>
+      <td class="muted">{{ j.created_at }}</td>
+      <td class="muted">{{ j.finished_at or '' }}</td>
+      <td>
+        {% if j.status == 'failed' %}
+        <form class="inline" method="post" action="/admin/jobs/{{ j.id }}/retry">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">retry</button>
+        </form>
+        {% elif j.status in ('queued', 'running') %}
+        <form class="inline" method="post" action="/admin/jobs/{{ j.id }}/cancel">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">cancel</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" class="muted">no jobs yet</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

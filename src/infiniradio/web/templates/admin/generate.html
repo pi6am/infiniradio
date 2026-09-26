@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}admin — generate{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">generate now</h2>
+  <form method="post" action="/admin/generate">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+
+    <label>from an existing prompt</label>
+    <select name="prompt_id">
+      <option value="0">— custom (below) —</option>
+      {% for p in prompts %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+    </select>
+
+    <label>custom style (stored as a disabled prompt; edit it later to enable)</label>
+    <input type="text" name="custom_name" placeholder="optional name, e.g. midnight-dub">
+    <textarea name="custom_style" placeholder="e.g. a slow dub reggae instrumental, deep bass, echoes, sparse melody"></textarea>
+
+    <label>custom song prompt (used only for custom styles)</label>
+    <textarea name="custom_song">[Intro]
+
+[Instrumental]
+
+[Outro]</textarea>
+
+    <div style="margin-top:14px"><button type="submit">queue generation</button></div>
+  </form>
+</div>
+{% endblock %}

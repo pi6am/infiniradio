@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}admin — settings{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">runtime settings</h2>
+  <p class="muted">Values override the config file immediately (no restart). Stream encoder
+    settings still come from config.toml and need a restart.</p>
+  <form method="post" action="/admin/settings">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <table>
+      {% for it in items %}
+      <tr>
+        <th style="width:220px">{{ it.label }}<br><span class="muted" style="font-weight:400">{{ it.key }}</span></th>
+        <td style="width:160px"><input type="text" name="{{ it.key }}" value="{{ it.value }}"></td>
+        <td class="muted">{{ it.help }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div style="margin-top:14px"><button type="submit">save</button></div>
+  </form>
+</div>
+{% endblock %}

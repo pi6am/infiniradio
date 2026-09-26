@@ -1,0 +1,68 @@
+"""Small shared helpers: time, logging, math, formatting."""
+
+from __future__ import annotations
+
+import logging
+import math
+from datetime import datetime, timedelta, timezone
+
+# All timestamps in the database are naive UTC ISO-8601 strings with fixed
+# precision, which makes them lexicographically sortable.
+_TS_SPEC = "seconds"
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def iso(dt: datetime) -> str:
+    return dt.replace(tzinfo=None).isoformat(timespec=_TS_SPEC)
+
+
+def parse_iso(s: str) -> datetime:
+    return datetime.fromisoformat(s)
+
+
+def iso_delta(seconds: float) -> str:
+    return iso(utcnow() - timedelta(seconds=seconds))
+
+
+def wilson_score(ups: int, downs: int, z: float = 1.96) -> float:
+    """Lower bound of the Wilson score interval for the upvote ratio.
+
+    Conservative with few votes: 1 up / 0 down scores well below 1.0.
+    Returns 0.0 when there are no votes.
+    """
+    n = ups + downs
+    if n <= 0:
+        return 0.0
+    p = ups / n
+    z2 = z * z
+    denom = 1 + z2 / n
+    centre = p + z2 / (2 * n)
+    margin = z * math.sqrt(max(0.0, (p * (1 - p) + z2 / (4 * n)) / n))
+    return (centre - margin) / denom
+
+
+def human_bytes(n: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(n) < 1024 or unit == "TiB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+        n /= 1024
+    return f"{n:.1f} TiB"
+
+
+def fmt_duration(seconds: float) -> str:
+    s = int(round(seconds))
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def setup_logging(verbose: bool = False) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

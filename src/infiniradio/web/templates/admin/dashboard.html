@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}admin — dashboard{% endblock %}
+{% block content %}
+
+{% if np.current %}
+<div class="card">
+  <h2 style="margin-top:0">on air</h2>
+  <b>{{ np.current.title }}</b>
+  <span class="muted">· {{ np.current.prompt }} · aired {{ np.current.airtime }} UTC
+    · feeder: {% if feeder_track %}writing “{{ feeder_track }}” ({{ queued_s }}s queued){% else %}idle{% endif %}</span>
+</div>
+{% else %}
+<div class="card muted">nothing has aired yet (waiting for the first ready track)</div>
+{% endif %}
+
+<div class="grid">
+  <div class="card stat">
+    <h2 style="margin-top:0">library</h2>
+    <div class="big">{{ stats.ready }} <span class="muted" style="font-size:14px">ready</span></div>
+    <div class="muted">{{ stats.generating }} generating · {{ stats.failed }} failed ·
+      {{ stats.protected }} protected · {{ stats.deleted }} deleted</div>
+  </div>
+  <div class="card stat">
+    <h2 style="margin-top:0">disk (music)</h2>
+    <div class="big">{{ usage_fmt }}</div>
+    <div class="muted">quota {{ quota_fmt }}</div>
+    <div class="bar" style="margin-top:8px">
+      <div style="width:{{ (quota.usage / quota.quota * 100) | round | int if quota.quota else 0 }}%"></div>
+    </div>
+    {% if quota.paused %}<p style="color:var(--bad);margin-bottom:0">generation paused: {{ quota.reason }}</p>{% endif %}
+  </div>
+  <div class="card stat">
+    <h2 style="margin-top:0">generator</h2>
+    <div class="big">{{ gen.backend }}</div>
+    {% if gen.ok is none %}<span class="muted">disabled</span>
+    {% elif gen.ok %}<span class="pill ok">reachable</span>
+    {% else %}<span class="pill err">unreachable</span> <span class="muted">{{ gen.error }}</span>{% endif %}
+    {% if gen.sidecar %}
+      {% if gen.sidecar.error %}<br><span class="pill err">sidecar down</span>
+      {% else %}<br><span class="pill ok">sidecar</span>
+        <span class="muted">{{ gen.sidecar.files }} files · {{ (gen.sidecar.bytes / 1048576) | round(1) }} MiB ·
+          {{ (gen.sidecar.disk_free / 1073741824) | round(1) }} GiB free on GPU box</span>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">recent jobs</h2>
+    <form method="post" action="/admin/cleanup" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">run sidecar cleanup now</button>
+    </form>
+  </div>
+  <table>
+    <tr><th>id</th><th>kind</th><th>prompt</th><th>status</th><th>error</th><th>created</th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{{ j.id }}</td>
+      <td>{% if j.parent_track_id %}variation of {{ j.parent_title }}{% else %}new{% endif %}</td>
+      <td>{{ j.prompt_name or j.style_override or '—' }}</td>
+      <td><span class="pill {% if j.status == 'done' %}ok{% elif j.status in ('failed', 'cancelled') %}err{% endif %}">{{ j.status }}</span></td>
+      <td class="muted" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ j.error or '' }}</td>
+      <td class="muted">{{ j.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<p class="muted">uptime {{ (uptime_s / 3600) | round(1) }} h ·
+  <a class="btn" href="/admin/generate">generate now…</a></p>
+{% endblock %}

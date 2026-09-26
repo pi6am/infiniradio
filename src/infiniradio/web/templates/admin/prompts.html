@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}admin — prompts{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">prompt library</h2>
+    <div>
+      <form class="inline" method="post" action="/admin/prompts/import">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit">re-import seeds</button>
+      </form>
+      <a class="btn" href="/admin/prompts/export">export</a>
+      <a class="btn" href="/admin/prompts/edit">new prompt</a>
+    </div>
+  </div>
+  <p class="muted">The DJ samples prompts with a Thompson-sampling bandit (a/b ≈ up/down votes
+    across that prompt's tracks), so good styles earn more studio time.</p>
+  <table>
+    <tr><th>name</th><th>enabled</th><th>tracks</th><th>votes (a/b)</th><th>used</th><th>last used</th><th></th></tr>
+    {% for p in prompts %}
+    <tr>
+      <td><a href="/admin/prompts/edit/{{ p.id }}">{{ p.name }}</a></td>
+      <td>{% if p.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</td>
+      <td class="muted">{{ p.tracks }}</td>
+      <td class="muted">{{ p.posterior }}</td>
+      <td class="muted">{{ p.times_used }}</td>
+      <td class="muted">{{ p.last_used_at or '—' }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/prompts/{{ p.id }}/toggle">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">{{ 'disable' if p.enabled else 'enable' }}</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">no prompts — add one or re-import the seed files</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,10 @@
+name = "lofi-jazz"
+style = "a lo-fi jazz instrumental, mellow electric piano, brushed drums, upright bass, vinyl warmth, relaxed swing"
+song = """
+[Intro]
+
+[Instrumental]
+
+[Outro]
+"""
+cot = "full"

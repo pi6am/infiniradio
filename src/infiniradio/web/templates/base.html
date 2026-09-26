@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}infiniradio{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b23; --panel2: #1d2430; --text: #dce3ec;
+    --muted: #7d8a9c; --accent: #7aa2f7; --good: #9ece6a; --bad: #f7768e;
+    --border: #262f3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 20px; border-bottom: 1px solid var(--border);
+  }
+  .brand { font-weight: 700; font-size: 1.1rem; color: var(--text); text-decoration: none; }
+  .brand span { color: var(--accent); }
+  nav a { color: var(--muted); text-decoration: none; margin-left: 16px; }
+  nav a:hover { color: var(--text); }
+  main { max-width: 860px; margin: 24px auto 60px; padding: 0 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
+  }
+  h1, h2 { font-size: 1.05rem; margin: 18px 0 8px; color: var(--muted);
+           text-transform: uppercase; letter-spacing: 0.08em; }
+  .muted { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px;
+       border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: var(--panel2); }
+  button, .btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 6px 12px; font-size: 14px; cursor: pointer;
+    text-decoration: none; display: inline-block;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  input[type=text], input[type=number], input[type=password], textarea, select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 7px 10px; font: inherit; width: 100%;
+  }
+  textarea { min-height: 90px; font-family: ui-monospace, monospace; font-size: 13px; }
+  label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: 13px; }
+  form.inline { display: inline; }
+  .vote { min-width: 58px; }
+  .vote.up.on { border-color: var(--good); color: var(--good); }
+  .vote.down.on { border-color: var(--bad); color: var(--bad); }
+  .bar { background: var(--panel2); border-radius: 6px; height: 10px; overflow: hidden; }
+  .bar > div { background: var(--accent); height: 100%; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .stat { text-align: left; }
+  .stat .big { font-size: 1.5rem; font-weight: 700; }
+  pre.abc {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; font-size: 12px; max-height: 340px; overflow: auto; white-space: pre-wrap;
+  }
+  .pill { display: inline-block; border: 1px solid var(--border); border-radius: 999px;
+          padding: 0 10px; font-size: 12px; color: var(--muted); margin-right: 4px; }
+  .pill.ok { color: var(--good); border-color: var(--good); }
+  .pill.err { color: var(--bad); border-color: var(--bad); }
+  audio { width: 100%; }
+  footer { text-align: center; color: var(--muted); font-size: 13px; padding: 20px; }
+  .right { text-align: right; }
+</style>
+<script src="/static/htmx.min.js"></script>
+</head>
+<body>
+<header>
+  <a class="brand" href="/">∞<span>infiniradio</span></a>
+  <nav>
+    <a href="/">listen</a>
+    {% if request.url.path.startswith('/admin') %}<a href="/admin">dashboard</a>{% endif %}
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>infiniradio · generated music, community-steered · non-commercial (YuE2 CC BY-NC)</footer>
+</body>
+</html>

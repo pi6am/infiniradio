@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}admin — track {{ t.id }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">track {{ t.id }} · {{ t.status }}
+    {% if t.protected %}<span class="pill ok">protected</span>{% endif %}
+    {% if t.is_variation %}<span class="pill">variation</span>{% endif %}</h2>
+
+  {% if t.status == 'ready' and t.playout_path %}
+  <audio controls src="/admin/track/{{ t.id }}/audio" style="width:100%"></audio>
+  {% endif %}
+
+  <form method="post" action="/admin/track/{{ t.id }}/rename">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>title</label>
+    <div style="display:flex;gap:8px">
+      <input type="text" name="title" value="{{ t.title }}">
+      <button type="submit">rename</button>
+    </div>
+  </form>
+
+  <table style="margin-top:14px">
+    <tr><th>prompt</th><td>{{ t.prompt_name }}</td></tr>
+    <tr><th>parent</th><td>{% if parent %}<a href="/admin/track/{{ parent.id }}">{{ parent.title }}</a>{% else %}—{% endif %}</td></tr>
+    <tr><th>seed / cot</th><td>{{ t.seed }} / {{ t.cot_mode }}</td></tr>
+    <tr><th>duration / size</th><td>{{ t.duration_fmt }} / {{ t.size_fmt }}</td></tr>
+    <tr><th>key / tempo</th><td>{{ t.music_key or '—' }} / {{ t.tempo or '—' }} BPM</td></tr>
+    <tr><th>plays</th><td>{{ t.play_count }} (last: {{ t.last_played_at or 'never' }})</td></tr>
+    <tr><th>votes</th><td>▲{{ t.vote_up }} ▼{{ t.vote_down }} · Wilson {{ t.score }}</td></tr>
+    <tr><th>style prompt used</th><td class="muted">{{ t.style_text }}</td></tr>
+    <tr><th>lyrics snapshot</th><td class="muted"><pre class="abc" style="max-height:160px">{{ t.lyrics_snapshot }}</pre></td></tr>
+  </table>
+
+  <div style="margin-top:14px;display:flex;gap:8px">
+    <form class="inline" method="post" action="/admin/track/{{ t.id }}/protect">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">{% if t.protected %}unprotect{% else %}protect{% endif %}</button>
+    </form>
+    <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">delete files</button>
+    </form>
+  </div>
+</div>
+
+{% if t.abc_text %}
+<div class="card">
+  <h2 style="margin-top:0">ABC score <span class="muted">(kept even if audio is deleted)</span></h2>
+  <pre class="abc">{{ t.abc_text }}</pre>
+
+  {% if t.status == 'ready' %}
+  <h2>create a variation</h2>
+  <p class="muted">Re-renders this track's saved ABC. Pick a different style prompt for a new
+    instrumentation; the lyrics/structure stay with the song.</p>
+  <form method="post" action="/admin/track/{{ t.id }}/variation">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>style prompt</label>
+    <select name="style_prompt_id">
+      <option value="0">— keep this track's own style —</option>
+      {% for p in prompts %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+    </select>
+    <label>…or custom style text (overrides the dropdown)</label>
+    <input type="text" name="custom_style" placeholder="e.g. an acoustic bossa nova, nylon guitar, soft percussion">
+    <label>seed (optional)</label>
+    <input type="number" name="seed" min="0">
+    <div style="margin-top:12px"><button type="submit">queue variation</button></div>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if children %}
+<div class="card">
+  <h2 style="margin-top:0">variations of this track</h2>
+  <table>
+    {% for c in children %}
+    <tr><td><a href="/admin/track/{{ c.id }}">{{ c.title }}</a></td>
+        <td class="muted">{{ c.prompt_name }}</td><td class="muted">{{ c.status }}</td>
+        <td class="muted">▲{{ c.vote_up }} ▼{{ c.vote_down }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if votes %}
+<div class="card">
+  <h2 style="margin-top:0">recent votes</h2>
+  <table>
+    {% for v in votes %}
+    <tr><td class="muted">{{ v.listener_id[:12] }}…</td>
+        <td>{{ '+1' if v.value == 1 else ('−1' if v.value == -1 else '0') }}</td>
+        <td class="muted">{{ v.updated_at }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if plays %}
+<div class="card">
+  <h2 style="margin-top:0">airings</h2>
+  <p class="muted" style="margin:0">{{ plays | length }} recent ·
+    {% for p in plays[:10] %}{{ p.started_at }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,123 @@
+"""HLS encoder: one long-lived ffmpeg child process.
+
+Receives raw PCM (s16le / 48 kHz / stereo) on stdin and writes an fMP4 HLS
+live window into data/hls. The playlist is served with no-store; segments are
+immutable within the window and publicly cacheable, which is what makes the
+"put a CDN in front later" scalability story trivial.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from pathlib import Path
+
+from ..config import Config
+
+log = logging.getLogger(__name__)
+
+
+class EncoderDied(Exception):
+    pass
+
+
+class Encoder:
+    def __init__(self, cfg: Config, hls_dir: Path):
+        self.cfg = cfg
+        self.hls_dir = hls_dir
+        self.proc: asyncio.subprocess.Process | None = None
+        self.started_at: float | None = None   # wall clock of process start
+        self.total_bytes = 0                    # PCM bytes written this life
+        self._stderr_task: asyncio.Task | None = None
+
+    @property
+    def bytes_per_second(self) -> int:
+        return int(cfg_sr(self.cfg)) * 2 * 2  # s16le stereo
+
+    def _args(self) -> list[str]:
+        c = self.cfg
+        return [
+            c.get("stream.ffmpeg_path", "ffmpeg"),
+            "-hide_banner", "-loglevel", "warning",
+            "-f", "s16le", "-ar", str(cfg_sr(c)), "-ac", "2", "-i", "pipe:0",
+            "-c:a", "aac", "-b:a", str(c.get("stream.bitrate", "128k")),
+            "-f", "hls",
+            "-hls_time", str(int(c.get("stream.segment_seconds", 6))),
+            "-hls_list_size", str(int(c.get("stream.playlist_segments", 5))),
+            "-hls_flags", "+delete_segments+append_list+omit_endlist+independent_segments",
+            "-hls_segment_type", "fmp4",
+            "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_segment_filename", str(self.hls_dir / "seg%06d.m4s"),
+            str(self.hls_dir / "live.m3u8"),
+        ]
+
+    async def start(self) -> None:
+        self.hls_dir.mkdir(parents=True, exist_ok=True)
+        if self.proc and self.proc.returncode is None:
+            return
+        self.proc = await asyncio.create_subprocess_exec(
+            *self._args(),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self.started_at = time.monotonic()
+        self.total_bytes = 0
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
+        log.info("HLS encoder started (pid %s)", self.proc.pid)
+
+    async def _drain_stderr(self) -> None:
+        assert self.proc and self.proc.stderr
+        while True:
+            line = await self.proc.stderr.readline()
+            if not line:
+                break
+            log.warning("encoder: %s", line.decode(errors="replace").rstrip())
+
+    async def write(self, pcm: bytes) -> None:
+        if not self.proc or self.proc.returncode is not None or not self.proc.stdin:
+            raise EncoderDied("encoder process is not running")
+        try:
+            self.proc.stdin.write(pcm)
+            await self.proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            raise EncoderDied(str(exc)) from exc
+        self.total_bytes += len(pcm)
+
+    def queued_seconds(self) -> float:
+        """Audio written but not yet played (encoder consumes ~1x realtime)."""
+        if self.started_at is None:
+            return 0.0
+        played = time.monotonic() - self.started_at - 0.5  # small priming margin
+        return max(0.0, self.total_bytes / self.bytes_per_second - played)
+
+    async def restart(self) -> None:
+        log.warning("restarting HLS encoder")
+        await self.stop()
+        await self.start()
+
+    async def stop(self) -> None:
+        proc, self.proc = self.proc, None
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            try:
+                await self._stderr_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._stderr_task = None
+        if proc and proc.returncode is None:
+            try:
+                if proc.stdin:
+                    proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+
+def cfg_sr(cfg: Config) -> int:
+    return int(cfg.get("stream.sample_rate", 48000))

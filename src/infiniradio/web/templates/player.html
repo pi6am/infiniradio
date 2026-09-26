@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}infiniradio — listen{% endblock %}
+{% block content %}
+
+<section class="card">
+  <audio id="audio" controls autoplay playsinline></audio>
+  <p class="muted" style="margin-bottom:0">
+    Live HLS broadcast — everyone hears the same program. Voting steers what
+    the DJ generates and keeps around.
+  </p>
+</section>
+
+{% include "_nowplaying.html" %}
+
+<script src="/static/hls.min.js"></script>
+<script>
+(function () {
+  const audio = document.getElementById('audio');
+  const src = '/live/live.m3u8';
+  if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+    audio.src = src;                       // Safari / native HLS
+  } else if (window.Hls && Hls.isSupported()) {
+    const hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20 });
+    hls.loadSource(src);
+    hls.attachMedia(audio);
+    hls.on(Hls.Events.ERROR, function (_e, data) {
+      if (data.fatal) setTimeout(function () { hls.startLoad(); }, 2000);
+    });
+  } else {
+    audio.replaceWith(document.createTextNode('Your browser cannot play HLS streams.'));
+  }
+  audio.play().catch(function () { /* autoplay blocked until user interacts */ });
+})();
+</script>
+{% endblock %}

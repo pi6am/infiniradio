@@ -1,0 +1,39 @@
+<div id="np-card" hx-get="/nowplaying-card" hx-trigger="every 15s" hx-swap="outerHTML">
+
+  {% if np.current %}
+  <div class="card">
+    <h2 style="margin-top:0">on air now</h2>
+    <div style="font-size:1.25rem;font-weight:700">{{ np.current.title }}</div>
+    <div class="muted">
+      {{ np.current.prompt }}
+      {% if np.current.music_key %} · {{ np.current.music_key }}{% endif %}
+      {% if np.current.tempo %} · {{ np.current.tempo }} BPM{% endif %}
+      · {{ np.current.duration_fmt }}
+      {% if np.current.is_variation %} · <span class="pill">variation</span>{% endif %}
+      {% if np.current.protected %} · <span class="pill ok">listener favourite</span>{% endif %}
+    </div>
+    <div style="margin-top:10px">{% with t = np.current %}{% include "_votebuttons.html" %}{% endwith %}</div>
+  </div>
+  {% else %}
+  <div class="card muted">warming up — the stream starts with the first generated track…</div>
+  {% endif %}
+
+  {% if np.recent %}
+  <div class="card">
+    <h2 style="margin-top:0">recently aired</h2>
+    <table>
+      {% for t in np.recent %}
+      <tr>
+        <td>
+          {{ t.title }}
+          <span class="muted">· {{ t.prompt }}{% if t.music_key %} · {{ t.music_key }}{% endif %}</span>
+        </td>
+        <td class="muted right" style="white-space:nowrap">{{ t.duration_fmt }}</td>
+        <td style="white-space:nowrap">{% include "_votebuttons.html" %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+</div>
