@@ -63,8 +63,10 @@ def track_public(row: dict, prompts: dict[int, str], my: dict[int, int]) -> dict
 
 
 def now_playing(db: DB, cfg, listener_id: str) -> dict:
-    latency = float(cfg.get("stream.latency_hint", 20.0))
-    t = iso(utcnow() - timedelta(seconds=latency))
+    # play_log airtimes already include the listener lag (scheduled by the
+    # feeder as write-time + stream.latency_hint), so "current" is simply the
+    # row covering the current wall-clock time. No second offset here.
+    t = iso(utcnow())
     rows = db.query(
         "SELECT p.started_at AS airtime, t.* FROM play_log p"
         " JOIN tracks t ON t.id = p.track_id"
@@ -83,7 +85,7 @@ def now_playing(db: DB, cfg, listener_id: str) -> dict:
     recent = [track_public(r, prompts, my) | {"airtime": r["airtime"]} for r in rows]
     return {
         "server_time": iso(utcnow()),
-        "latency_hint": latency,
+        "latency_hint": float(cfg.get("stream.latency_hint", 20.0)),
         "current": current,
         "recent": recent,
     }

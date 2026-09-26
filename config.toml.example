@@ -62,7 +62,10 @@ segment_seconds = 6
 playlist_segments = 5
 bitrate = "128k"          # HLS encoder bitrate (restart to apply)
 sample_rate = 48000
-latency_hint = 20.0       # approx. seconds between feeder and listeners' ears
+# How far listeners trail what the feeder writes (players sit ~3 segments
+# behind the live edge). Used once, when scheduling a track's airtime, so
+# "on air now" matches what listeners actually hear.
+latency_hint = 20.0
 ffmpeg_path = "ffmpeg"
 ffprobe_path = "ffprobe"
 

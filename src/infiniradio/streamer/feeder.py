@@ -51,6 +51,17 @@ class Feeder:
 
     # -- manual queue & skip -------------------------------------------------
 
+    def _listener_lag(self) -> float:
+        """How far listeners trail what we write into the encoder.
+
+        ffmpeg muxes PCM into segments immediately (at full speed); players
+        ride the HLS live edge roughly liveSyncDurationCount (3) segments
+        behind the newest segment. The feeder's pacing lead does NOT delay
+        listeners, so the only offset between "written now" and "heard now"
+        is this player-side lag.
+        """
+        return float(self.cfg.get("stream.latency_hint", 20.0))
+
     def _pop_queue(self) -> dict | None:
         """Oldest manually queued playable track (drops stale entries)."""
         while True:
@@ -93,6 +104,13 @@ class Feeder:
                 self._silence_since = None
                 skipped = await self._feed_track(track)
                 if skipped:
+                    # The flushed audio never reached listeners as scheduled;
+                    # drop its play_log entry so now-playing stays truthful.
+                    self.rt.db.execute(
+                        "DELETE FROM play_log WHERE id ="
+                        " (SELECT MAX(id) FROM play_log WHERE track_id = ?)",
+                        (track["id"],),
+                    )
                     # Flush everything already buffered of the skipped track
                     # by restarting the encoder (players resync in seconds).
                     log.info("flushing buffer after skip (encoder restart)")
@@ -157,13 +175,12 @@ class Feeder:
             if not chunk:
                 break
             if first:
-                # This track starts airing once everything already queued
-                # has been consumed.
-                airtime = iso(utcnow() + timedelta(seconds=self.encoder.queued_seconds()))
+                # Listeners start hearing this track one listener-lag after
+                # we write its first samples (players trail the live edge).
+                airtime = iso(utcnow() + timedelta(seconds=self._listener_lag()))
                 library.mark_aired(self.rt.db, track["id"], airtime)
-                log.info("airing track %s (%s) at %s [queued %.1fs]",
-                         track["id"], track["title"], airtime,
-                         self.encoder.queued_seconds())
+                log.info("airing track %s (%s) — audible from %s",
+                         track["id"], track["title"], airtime)
                 first = False
             await self._pace()
             await self.encoder.write(chunk)
