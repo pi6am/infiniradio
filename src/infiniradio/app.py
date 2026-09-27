@@ -106,6 +106,8 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
     try:
         backend = resolve_backend(cfg, mockaudio)
         _check_playout_viable(cfg, backend)
+        from . import naming
+        naming.load_lists(cfg.path("naming.words_dir"))
         from .util import lock_data_dir
         lock_data_dir(cfg.path("library.data_dir"))
     except (StartupError, RuntimeError) as exc:

@@ -16,6 +16,7 @@ import shutil
 import tomllib
 from pathlib import Path
 
+from . import naming
 from .config import Config, runtime_get
 from .db import DB
 from .generator.base import GenResult
@@ -112,15 +113,11 @@ async def ingest(db: DB, cfg: Config, track_id: int, result: GenResult) -> dict:
     size = original.stat().st_size + playout.stat().st_size
 
     row = db.one("SELECT * FROM tracks WHERE id = ?", (track_id,)) or {}
-    prompt = db.one("SELECT * FROM prompts WHERE id = ?", (row.get("prompt_id"),)) \
-        if row.get("prompt_id") else None
     parent = db.one("SELECT * FROM tracks WHERE id = ?", (row.get("parent_track_id"),)) \
         if row.get("parent_track_id") else None
-    if parent:
-        style_name = prompt["name"] if prompt else "custom"
-        title = f"{parent['title'] or 'untitled'} \u00b7 {style_name}"
-    else:
-        title = f"{prompt['name']} #{track_id:04d}" if prompt else f"track #{track_id:04d}"
+    # Fresh tracks and variations both get a random generated title; the
+    # prompt/lineage context stays in the DB (admin/player metadata).
+    title = naming.unique_title(db)
 
     key, tempo = parse_abc_header(result.abc_text or "")
     db.execute(

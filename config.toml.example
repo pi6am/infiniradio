@@ -95,3 +95,10 @@ quota_gb = 50.0                # runtime: max disk used by music (generation pau
 # TOML files in this directory are imported into the prompt library on first
 # boot; afterwards the database is the source of truth (export from admin).
 seed_dir = "prompts"
+
+[naming]
+# Word-list directory for generated track titles: nouns.txt, adjectives.txt,
+# verbs.txt, verbs_third.txt, adverbs.txt — one word per line, '#' comments
+# allowed. Loaded once at server startup (no hot reload). Audition with:
+#   python -m infiniradio.naming --n 60 --seed 3
+words_dir = "names"

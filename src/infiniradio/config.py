@@ -84,6 +84,12 @@ DEFAULTS: dict[str, Any] = {
     "prompts": {
         "seed_dir": "prompts",
     },
+    "naming": {
+        # Word-list directory for generated track titles (one file per
+        # slot: nouns.txt, adjectives.txt, verbs.txt, verbs_third.txt,
+        # adverbs.txt). Loaded once at startup.
+        "words_dir": "names",
+    },
 }
 
 # key -> (default, cast, human label, help) — editable from the admin panel.

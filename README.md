@@ -34,6 +34,9 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
   job control, runtime settings, plus pause switches for generation and playback
   (paused playback airs silence so the stream stays live). Single admin account,
   scrypt password.
+- **Generated track titles** — curated word lists + template patterns
+  (`Cathedral of Glass`, `Drift Endlessly`); seedable, fully offline, and
+  auditionable with `python -m infiniradio.naming`.
 - **Cross-platform** — Linux/macOS/Windows, no named pipes or OS-specific tricks;
   the only external dependency is **ffmpeg**.
 
