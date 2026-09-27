@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+import math
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -161,6 +162,115 @@ async def dashboard(request: Request):
              queued_s=round(rt.feeder.encoder.queued_seconds(), 1) if rt.feeder else 0,
              uptime_s=int((utcnow() - rt.started).total_seconds()),
              usage_fmt=human_bytes(quota["usage"]), quota_fmt=human_bytes(quota["quota"])))
+
+
+# ------------------------------------------------------------------ listeners
+
+# scale -> (window, bucket seconds, bucket label format) — all UTC. Buckets
+# align to unix-epoch boundaries, so hour/6-hour/day divisions land on :00.
+LISTENER_SCALES: dict[str, tuple[timedelta, int, str]] = {
+    "1h":  (timedelta(hours=1),        60,     "%H:%M"),
+    "1d":  (timedelta(hours=24),       5 * 60, "%H:%M"),
+    "7d":  (timedelta(hours=24 * 7),   3600,   "%m-%d %H:%M"),
+    "30d": (timedelta(hours=24 * 30),  6 * 3600, "%m-%d %H:%M"),
+    "1yr": (timedelta(hours=24 * 365), 24 * 3600, "%m-%d"),
+}
+
+# SVG plot geometry (viewBox units)
+_PLOT_W, _PLOT_H = 960.0, 180.0
+_PAD_L, _PAD_T, _PAD_B = 34.0, 8.0, 22.0
+
+
+def _listener_buckets(db, window: timedelta, bucket_s: int, label_fmt: str) -> list[dict]:
+    """Aggregated buckets for the chart, oldest first.
+
+    The plotted value is the time-average over the WHOLE bucket (sum of
+    listener-minutes / minutes in the bucket): minutes without a row are
+    minutes with zero listeners, and pretending otherwise would inflate
+    gappy history. At the 1h scale buckets are single minutes, i.e. raw.
+    """
+    since = (utcnow() - window).strftime("%Y-%m-%dT%H:%M")
+    rows = db.query(
+        "SELECT (CAST(strftime('%s', minute) AS INTEGER) / ?) AS b,"
+        " SUM(listeners) AS total, MAX(listeners) AS peak"
+        " FROM listener_minutes WHERE minute >= ? GROUP BY b ORDER BY b",
+        (bucket_s, since))
+    minutes = max(1, bucket_s // 60)
+    out = []
+    for r in rows:
+        start = datetime.fromtimestamp(r["b"] * bucket_s, tz=timezone.utc)
+        nxt = datetime.fromtimestamp((r["b"] + 1) * bucket_s, tz=timezone.utc)
+        out.append({
+            "label": start.strftime(label_fmt),
+            "value": r["total"] / minutes,          # average over the bucket
+            "peak": r["peak"],
+            "tip": (f"{start.strftime('%m-%d %H:%M')}–{nxt.strftime('%H:%M')} UTC"
+                    f" · avg {r['total'] / minutes:.1f} · peak {r['peak']}"),
+        })
+    return out
+
+
+def _layout(buckets: list[dict]) -> tuple[list[dict], float, list[dict]]:
+    """Add pixel geometry to buckets; returns (buckets, y_max, y_ticks)."""
+    n = len(buckets)
+    if not n:
+        return [], 0.0, []
+    step = _PLOT_W / n
+    bar_w = max(1.0, step * 0.8)
+    vmax = max(b["value"] for b in buckets) or 1.0
+    # nice ceiling: 1/2/5 x 10^k
+    mag = 10 ** math.floor(math.log10(vmax)) if vmax > 0 else 1
+    y_max = 10 * mag
+    for mult in (1, 2, 5, 10):
+        y_max = mult * mag
+        if vmax <= y_max:
+            break
+    for i, b in enumerate(buckets):
+        b["x"] = round(_PAD_L + i * step + (step - bar_w) / 2, 1)
+        b["h"] = round(b["value"] / y_max * _PLOT_H, 1)
+        b["y"] = round(_PAD_T + _PLOT_H - b["h"], 1)
+        b["w"] = round(bar_w, 1)
+    ticks = []
+    for frac in (1.0, 0.5):
+        ticks.append({"y": round(_PAD_T + _PLOT_H * (1 - frac), 1),
+                      "v": _fmt_count(y_max * frac)})
+    return buckets, y_max, ticks
+
+
+def _fmt_count(v: float) -> str:
+    return f"{v:.0f}" if abs(v - round(v)) < 0.05 else f"{v:.1f}"
+
+
+@router.get("/listeners", response_class=HTMLResponse)
+async def listeners_page(request: Request, scale: str = "7d"):
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    if scale not in LISTENER_SCALES:
+        scale = "7d"
+    window, bucket_s, label_fmt = LISTENER_SCALES[scale]
+    buckets, y_max, ticks = _layout(
+        _listener_buckets(rt.db, window, bucket_s, label_fmt))
+    # a handful of x-axis labels, evenly spaced
+    xlabels = []
+    if buckets:
+        stride = max(1, len(buckets) // 7)
+        for i in range(0, len(buckets), stride):
+            xlabels.append({"x": round(buckets[i]["x"], 1),
+                            "text": buckets[i]["label"]})
+    stats = {
+        "peak": max((b["peak"] for b in buckets), default=0),
+        # average audience during minutes someone was actually listening
+        "avg": (sum(b["value"] for b in buckets) / len(buckets)) if buckets else 0.0,
+        "buckets": len(buckets),
+    }
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/listeners.html",
+        _ctx(request, scale=scale, scales=list(LISTENER_SCALES),
+             buckets=buckets, y_max=_fmt_count(y_max), y_ticks=ticks,
+             xlabels=xlabels, stats=stats,
+             now_listeners=(rt.telemetry.last_minute_count
+                            if rt.telemetry is not None else 0)))
 
 
 # ------------------------------------------------------------------ library

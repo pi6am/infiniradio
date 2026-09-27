@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block bodyclass %}wide{% endblock %}
+{% block title %}admin — listeners{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <h2 style="margin:0">listeners</h2>
+    <div>
+      {% for s in scales %}
+      <a class="btn" href="/admin/listeners?scale={{ s }}"
+         style="{% if s == scale %}border-color:var(--accent){% endif %}">{{ s }}</a>
+      {% endfor %}
+      <a class="btn" href="/admin/listeners?scale={{ scale }}" title="reload from recent data">↻ refresh</a>
+    </div>
+  </div>
+  <p class="muted" style="margin:8px 0 12px">now: <b>{{ now_listeners }}</b> listener(s)
+    · peak: <b>{{ stats.peak }}</b> · average: <b>{{ stats.avg | round(1) }}</b>
+    · {{ stats.buckets }} bucket(s)</p>
+
+  {% if buckets %}
+  <svg viewBox="0 0 1000 220" style="width:100%;height:auto;display:block" role="img"
+       aria-label="listener counts over time">
+    <!-- horizontal gridlines + y labels -->
+    <line x1="{{ 34 }}" y1="{{ 8 + 180 }}" x2="{{ 34 + 960 }}" y2="{{ 8 + 180 }}"
+          stroke="var(--border)" stroke-width="1"/>
+    {% for t in y_ticks %}
+    <line x1="{{ 34 }}" y1="{{ t.y }}" x2="{{ 34 + 960 }}" y2="{{ t.y }}"
+          stroke="var(--border)" stroke-width="1" stroke-dasharray="3 4"/>
+    <text x="{{ 28 }}" y="{{ t.y + 4 }}" text-anchor="end" font-size="11"
+          fill="var(--muted)">{{ t.v }}</text>
+    {% endfor %}
+    <text x="{{ 28 }}" y="{{ 8 + 180 + 4 }}" text-anchor="end" font-size="11"
+          fill="var(--muted)">0</text>
+    <!-- one bar per bucket; native tooltip = bucket range, average, peak -->
+    {% for b in buckets %}
+    <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
+          fill="var(--accent)" opacity="0.85"><title>{{ b.tip }}</title></rect>
+    {% endfor %}
+    <!-- x-axis labels -->
+    {% for l in xlabels %}
+    <text x="{{ l.x }}" y="{{ 8 + 180 + 16 }}" font-size="11"
+          fill="var(--muted)">{{ l.text }}</text>
+    {% endfor %}
+  </svg>
+  <p class="muted" style="margin:8px 0 0">UTC times · time-averaged unique listeners</p>
+  {% else %}
+  <p class="muted">no listener data in this window yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
