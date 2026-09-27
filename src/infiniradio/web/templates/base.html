@@ -94,13 +94,11 @@
     <a href="/admin/settings" class="{{ 'active' if path.startswith('/admin/settings') }}">settings</a>
     <form method="post" action="/admin/logout"><button type="submit">log out</button></form>
   </nav>
-  {% else %}
-  <nav><a href="/">player</a><a href="/admin">admin</a></nav>
   {% endif %}
 </header>
 <main>
 {% block content %}{% endblock %}
 </main>
-<footer>infiniradio · generated music, community-steered · non-commercial (YuE2 CC BY-NC)</footer>
+<footer>infiniradio · infinite generated music</footer>
 </body>
 </html>

@@ -1,8 +1,10 @@
 # infiniradio
 
-An infinite radio station: [YuE2](https://huggingface.co/m-a-p/YuE2-3B) music generated
-through [ComfyUI](https://github.com/comfyanonymous/ComfyUI), scheduled by a DJ that
+An infinite radio station: Dynamically generated music from
+[ComfyUI](https://github.com/comfyanonymous/ComfyUI), scheduled by a DJ that
 learns from listener votes, and broadcast as a live HLS stream everyone hears together.
+
+Recommended music generation model: [YuE2](https://huggingface.co/m-a-p/YuE2-3B)
 
 ```
 listeners ──HLS──> web app <──> DJ ──picks──> library ──PCM──> ffmpeg ──> HLS segments
@@ -39,16 +41,13 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
 
 ```bash
 # Python 3.11+, ffmpeg on PATH
-uv venv && uv pip install -e .        # or: python -m pip install -e .
+python -m venv .venv
+source .venv/bin/activate             # Or .venv\Scripts\activate.bat on Windows
+python -m pip install -e .
 cp config.toml.example config.toml    # set [generator] backend + [comfyui] url
 python -m infiniradio passwd          # set the admin password
 python -m infiniradio                 # serve on http://127.0.0.1:8000
 ```
-
-The server refuses to start if no generator backend is configured and the
-library is empty (it would only ever broadcast silence). With a backend
-configured but ComfyUI unreachable, it starts and surfaces the failures in
-the admin dashboard.
 
 ## Testing without a GPU
 
@@ -56,15 +55,13 @@ the admin dashboard.
 python -m infiniradio --mockaudio
 ```
 
-The mock generator is **only** reachable through this flag — never through
-config — so a misconfigured deployment can never serve sine tones to
-listeners. It synthesizes tone "songs" with fake ABC scores, letting you
+The mock generator is synthesizes placeholder tone "songs" so you can
 exercise the whole pipeline (DJ, votes, eviction, admin) before pointing it
 at a real GPU.
 
 ## Real generation (ComfyUI + YuE2)
 
-1. Set up ComfyUI with your working YuE2 workflow (the tested graph is in
+1. Set up ComfyUI with a working YuE2 workflow (an example graph is in
    `workflow/infiniradio.json`; node IDs it patches are configured under
    `[comfyui.workflow_vars]`).
 2. In `config.toml`:
@@ -78,8 +75,8 @@ at a real GPU.
    audio_format = "flac"        # or "mp3" — patched into the workflow at submit
    ```
 
-3. On the **ComfyUI machine**, run the cleanup sidecar so finished artifacts don't
-   overflow the drive (stdlib only, works on Windows too):
+3. (Optional) On the **ComfyUI machine**, run the cleanup sidecar so finished
+   artifacts don't overflow the drive:
 
    ```bash
    python sidecar/comfyui_cleanup.py --dir /path/to/ComfyUI/output/radio --token <secret>
@@ -92,8 +89,7 @@ at a real GPU.
    cleanup_every_n = 1
    ```
 
-   The server triggers cleanup before every Nth submission — never on a timer,
-   because ABC files appear while their audio is still generating.
+   The server triggers cleanup before every Nth submission.
 
 The server downloads each job's audio + ABC via the ComfyUI API (`/prompt`, `/history`,
 `/view`) into its own `data/music/<track_id>/` — no shared filesystem required.
@@ -128,10 +124,10 @@ Config path: `--config X` or `INFINIRADIO_CONFIG`.
 
 ## Notes
 
-- The YuE2 weights are **CC BY-NC 4.0**: this project is for non-commercial use only.
-  infiniradio itself is MIT-licensed.
+- The YuE2 weights are **CC BY-NC 4.0**. If you use YuE2 to generate music, the
+  generated music is for non-commercial use only. infiniradio itself is MIT-licensed.
 - Latency: standard HLS ≈ 15–30 s. A track's airtime is scheduled as
   write-time + `stream.latency_hint` (players trail the live edge by ~3
   segments), which is what keeps "on air now" aligned with what listeners
   actually hear.
-- Generation is serial by design (one job at a time); YuE2 uses the whole GPU anyway.
+
