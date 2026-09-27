@@ -57,10 +57,10 @@ TEMPLATES: list[tuple[int, str]] = [
     (20, "{verb} {adverb}"),
     ( 5, "{verb} the {noun}"),
     (10, "{noun} {verb3s}"),
-    ( 5, "{noun} {verb3s} {adverb}"),
-    ( 2, "{adverb} or {adverb}"),
-    ( 2, "{verb} or {verb}"),
-    (20, "{adjective} {noun} {verb3s}"),
+    ( 2, "{noun} {verb3s} {adverb}"),
+    ( 1, "{adverb} or {adverb}"),
+    ( 1, "{verb} or {verb}"),
+    ( 5, "{adjective} {noun} {verb3s}"),
     ( 1, "{adjective} {noun} {verb3s} {adverb}"),
 ]
 
