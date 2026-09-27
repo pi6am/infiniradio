@@ -31,6 +31,9 @@
   nav a.active { color: var(--accent); background: var(--panel2); }
   nav form { display: inline; margin-left: 8px; }
   main { max-width: 860px; margin: 24px auto 60px; padding: 0 16px; }
+  /* Wide mode (data-table pages: library, aired, jobs) — use the full
+     display width so long values don't wrap into tall rows. */
+  body.wide main { max-width: none; }
   .card {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
@@ -80,7 +83,7 @@
 <script src="/static/htmx.min.js"></script>
 {% endif %}
 </head>
-<body>
+<body class="{% block bodyclass %}{% endblock %}">
 <header>
   <a class="brand" href="/">∞<span>infiniradio</span></a>
   {% set path = request.url.path %}
