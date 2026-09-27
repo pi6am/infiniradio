@@ -56,6 +56,7 @@ def _track_with_meta(db, row: dict) -> dict:
     out["score"] = round(wilson_score(row["vote_up"], row["vote_down"]), 3)
     out["duration_fmt"] = fmt_duration(row["duration_s"] or 0)
     out["size_fmt"] = human_bytes(row["size_bytes"])
+    out["listens"] = row["listener_count"] or 0
     return out
 
 
@@ -155,6 +156,8 @@ async def dashboard(request: Request):
              gen_paused=gen_paused, gen_reason=gen_reason,
              playback_paused=bool(db.get_setting("playback_paused")),
              has_generator=rt.generator is not None,
+             listeners_last_minute=(rt.telemetry.last_minute_count
+                                    if rt.telemetry is not None else 0),
              queued_s=round(rt.feeder.encoder.queued_seconds(), 1) if rt.feeder else 0,
              uptime_s=int((utcnow() - rt.started).total_seconds()),
              usage_fmt=human_bytes(quota["usage"]), quota_fmt=human_bytes(quota["quota"])))

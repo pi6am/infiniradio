@@ -27,6 +27,7 @@
     <tr><th>duration / size</th><td>{{ t.duration_fmt }} / {{ t.size_fmt }}</td></tr>
     <tr><th>key / tempo</th><td>{{ t.music_key or '—' }} / {{ t.tempo or '—' }} BPM</td></tr>
     <tr><th>plays</th><td>{{ t.play_count }} (last: {{ t.last_played_at or 'never' }})</td></tr>
+    <tr><th>listens</th><td>{{ t.listens }} unique listener(s) across all airings</td></tr>
     <tr><th>votes</th><td>▲{{ t.vote_up }} ▼{{ t.vote_down }} · Wilson {{ t.score }}</td></tr>
     <tr><th>style prompt used</th><td class="muted">{{ t.style_text }}</td></tr>
     <tr><th>lyrics snapshot</th><td class="muted"><pre class="abc" style="max-height:160px">{{ t.lyrics_snapshot }}</pre></td></tr>

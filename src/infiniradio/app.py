@@ -35,6 +35,7 @@ class Runtime:
     db: DB
     generator: Generator | None
     feeder: object | None = None
+    telemetry: object | None = None
     started: datetime = field(default_factory=utcnow)
 
 
@@ -130,12 +131,15 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
         app.state.sessions = auth.Sessions(auth.get_server_secret(db, cfg))
 
         from .streamer.feeder import Feeder  # deferred import (avoids cycles)
+        from . import telemetry as telemetry_mod
         rt = Runtime(cfg=cfg, db=db, generator=generator)
         rt.feeder = Feeder(rt)
+        rt.telemetry = telemetry_mod.Telemetry(db)
         app.state.rt = rt
 
         tasks = [asyncio.create_task(dj.janitor_loop(rt)),
-                 asyncio.create_task(rt.feeder.run())]
+                 asyncio.create_task(rt.feeder.run()),
+                 asyncio.create_task(telemetry_mod.telemetry_loop(rt))]
         if generator is not None:
             tasks.append(asyncio.create_task(dj.job_runner(rt)))
             tasks.append(asyncio.create_task(dj.commission_loop(rt)))

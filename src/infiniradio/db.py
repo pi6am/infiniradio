@@ -105,6 +105,16 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE play_log ADD COLUMN prog_offset REAL;
     ALTER TABLE play_log ADD COLUMN epoch INTEGER;
     """,
+    4: """
+    -- Listener telemetry: unique listeners per UTC minute (rows only for
+    -- minutes with activity; hourly-averaged compaction can come later)
+    -- and cumulative unique listeners per track airing.
+    CREATE TABLE listener_minutes (
+      minute TEXT PRIMARY KEY,
+      listeners INTEGER NOT NULL
+    );
+    ALTER TABLE tracks ADD COLUMN listener_count INTEGER NOT NULL DEFAULT 0;
+    """,
 }
 
 

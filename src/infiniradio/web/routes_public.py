@@ -372,6 +372,8 @@ async def live(request: Request, fname: str):
         return Response(status_code=404)
     if not p.is_file():
         return Response(status_code=404)
+    if rt.telemetry is not None:
+        rt.telemetry.heartbeat(request)   # presence = fetched an HLS file
     if p.suffix == ".m3u8":
         # Playlists must never be cached, and their PDT offsets normalized.
         return PlainTextResponse(_fix_pdt_offsets(p.read_text(encoding="utf-8")),

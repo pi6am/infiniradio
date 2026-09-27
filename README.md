@@ -37,6 +37,9 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
 - **Generated track titles** — curated word lists + template patterns
   (`Cathedral of Glass`, `Drift Endlessly`); seedable, fully offline, and
   auditionable with `python -m infiniradio.naming`.
+- **Listener telemetry** — unique listeners per minute and per aired track
+  (web-player cookie, or an IP+UA hash for cookie-less clients like VLC),
+  collected from HLS poll traffic; only counts are stored, never ids.
 - **Cross-platform** — Linux/macOS/Windows, no named pipes or OS-specific tricks;
   the only external dependency is **ffmpeg**.
 
