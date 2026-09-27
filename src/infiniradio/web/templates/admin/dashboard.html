@@ -72,6 +72,7 @@
     <div class="big"><a href="/admin/library" style="color:inherit;text-decoration:none">{{ stats.ready }}</a> <span class="muted" style="font-size:14px">ready</span></div>
     <div class="muted"><a href="/admin/library?status=generating" style="color:inherit">{{ stats.generating }} generating</a> · {{ stats.failed }} failed ·
       {{ stats.protected }} protected · {{ stats.deleted }} deleted</div>
+    <div class="muted">{{ (stats.playtime_s / 3600) | round(1) }} h total playtime</div>
   </div>
   <div class="card stat">
     <h2 style="margin-top:0">disk (music)</h2>

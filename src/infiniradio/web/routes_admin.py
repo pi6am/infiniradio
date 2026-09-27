@@ -118,7 +118,9 @@ async def dashboard(request: Request):
         " COALESCE(SUM(status = 'generating'), 0) AS generating,"
         " COALESCE(SUM(status = 'failed'), 0) AS failed,"
         " COALESCE(SUM(status = 'deleted'), 0) AS deleted,"
-        " COALESCE(SUM(protected = 1 AND status = 'ready'), 0) AS protected FROM tracks"
+        " COALESCE(SUM(protected = 1 AND status = 'ready'), 0) AS protected,"
+        " COALESCE(SUM(CASE WHEN status = 'ready' THEN duration_s ELSE 0 END), 0.0)"
+        " AS playtime_s FROM tracks"
     )
     gen_status = await rt.generator.status() if rt.generator else {"backend": "off", "ok": None}
     jobs = db.query("SELECT j.*, p.name AS prompt_name, pt.title AS parent_title"
