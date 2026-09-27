@@ -37,7 +37,8 @@ class Feeder:
     def __init__(self, rt):
         self.rt = rt
         self.cfg: Config = rt.cfg
-        self.encoder = Encoder(rt.cfg, rt.cfg.path("library.data_dir") / "hls")
+        self.encoder = Encoder(rt.cfg, rt.cfg.path("library.data_dir") / "hls",
+                               db=rt.db)
         self.current_track_id: int | None = None
         self.skip_requested = False
         self._silence_since: float | None = None

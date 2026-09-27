@@ -88,7 +88,10 @@
   if (audio.canPlayType('application/vnd.apple.mpegurl')) {
     audio.src = src;                       // Safari / native HLS (no PDT access)
   } else if (window.Hls && Hls.isSupported()) {
-    hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20 });
+    hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20,
+                    // A paused/backgrounded player can fall far behind the
+                    // live edge; jump back to live rather than drifting.
+                    liveMaxLatencyDurationCount: 10 });
     hls.loadSource(src);
     hls.attachMedia(audio);
     hls.on(Hls.Events.FRAG_CHANGED, function (_e, data) { onFrag(data && data.frag); });

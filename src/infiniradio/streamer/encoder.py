@@ -23,13 +23,14 @@ class EncoderDied(Exception):
 
 
 class Encoder:
-    def __init__(self, cfg: Config, hls_dir: Path):
+    def __init__(self, cfg: Config, hls_dir: Path, db=None):
         self.cfg = cfg
         self.hls_dir = hls_dir
+        self.db = db  # optional: persists the epoch counter across restarts
         self.proc: asyncio.subprocess.Process | None = None
         self.started_at: float | None = None   # wall clock of process start
         self.total_bytes = 0                    # PCM bytes written this life
-        self.epoch = 0                          # increments on every start()
+        self.epoch = 0
         self.started_wall = None                # utcnow() at process start
         self._stderr_task: asyncio.Task | None = None
 
@@ -67,10 +68,30 @@ class Encoder:
         )
         self.started_at = time.monotonic()
         self.total_bytes = 0
-        self.epoch += 1
+        self.epoch = self._next_epoch()
         self.started_wall = datetime.now(timezone.utc).replace(tzinfo=None)
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         log.info("HLS encoder started (pid %s, epoch %d)", self.proc.pid, self.epoch)
+
+    def _next_epoch(self) -> int:
+        """Globally unique epoch id for this encoder life.
+
+        play_log rows are matched by (epoch, prog_offset); an in-memory
+        counter would mint a colliding "epoch 1" on every server restart,
+        so the counter is persisted. First run bootstraps above any epoch
+        already present in play_log (stale rows from the in-memory-counter
+        era must never be matched again).
+        """
+        if self.db is None:
+            self.epoch += 1
+            return self.epoch
+        prev = self.db.get_setting("encoder.epoch", None)
+        if prev is None:
+            row = self.db.one("SELECT COALESCE(MAX(epoch), 0) AS m FROM play_log")
+            prev = row["m"] if row else 0
+        epoch = int(prev) + 1
+        self.db.set_setting("encoder.epoch", epoch)
+        return epoch
 
     def program_seconds(self) -> float:
         """Seconds of program written this encoder life (== the HLS timeline,
