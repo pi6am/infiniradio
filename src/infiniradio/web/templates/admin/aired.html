@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}admin — aired{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">aired</h2>
+    <span class="muted">last {{ aired | length }} airing(s) — one row per play,
+      newest first · <a href="/admin/library">library →</a></span>
+  </div>
+  <table>
+    <tr><th>#</th><th>aired at (UTC)</th><th>title</th><th>prompt</th><th>dur</th>
+        <th>plays</th><th>votes</th><th>score</th><th>size</th><th></th></tr>
+    {% for t in aired %}
+    <tr>
+      <td class="muted">{{ loop.index }}</td>
+      <td class="muted" style="white-space:nowrap">{{ t.aired_at }}</td>
+      <td><a href="/admin/track/{{ t.id }}">{{ t.title or '—' }}</a>
+        {% if t.is_variation %}<span class="pill">var</span>{% endif %}
+        {% if t.protected %}<span class="pill ok">protected</span>{% endif %}
+        {% if t.status == 'deleted' %}<span class="pill err">deleted</span>{% endif %}</td>
+      <td class="muted">{{ t.prompt_name }}</td>
+      <td class="muted">{{ t.duration_fmt }}</td>
+      <td class="muted">{{ t.play_count }}</td>
+      <td class="muted">▲{{ t.vote_up }} ▼{{ t.vote_down }}</td>
+      <td class="muted">{{ t.score }}</td>
+      <td class="muted">{{ t.size_fmt }}</td>
+      <td>
+        {% if t.status == 'ready' %}
+        <form class="inline" method="post" action="/admin/track/{{ t.id }}/queue_next">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" title="air this track next">▶ next</button>
+        </form>
+        {% endif %}
+        {% if t.status != 'deleted' %}
+        <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" class="muted">nothing has aired yet</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

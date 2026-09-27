@@ -174,6 +174,30 @@ async def library_page(request: Request, status: str = "ready"):
         _ctx(request, tracks=tracks, status=status))
 
 
+@router.get("/aired", response_class=HTMLResponse)
+async def aired_page(request: Request, n: int = 100):
+    """Airing history: every play_log entry, newest first.
+
+    Unlike the library (one row per track), this is one row per airing —
+    a track played twice appears twice, exactly as it went out on air.
+    """
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    n = max(10, min(n, 500))
+    rows = rt.db.query(
+        "SELECT p.started_at AS aired_at, t.* FROM play_log p"
+        " JOIN tracks t ON t.id = p.track_id"
+        " ORDER BY p.id DESC LIMIT ?", (n,))
+    aired = []
+    for r in rows:
+        entry = _track_with_meta(rt.db, r)
+        entry["aired_at"] = r["aired_at"]
+        aired.append(entry)
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/aired.html", _ctx(request, aired=aired, n=n))
+
+
 @router.get("/track/{track_id}", response_class=HTMLResponse)
 async def track_page(request: Request, track_id: int):
     if not _is_admin(request):

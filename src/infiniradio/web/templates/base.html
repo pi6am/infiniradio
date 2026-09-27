@@ -88,6 +88,7 @@
   <nav>
     <a href="/admin/" class="{{ 'active' if path in ('/admin', '/admin/') }}">dashboard</a>
     <a href="/admin/library" class="{{ 'active' if path.startswith('/admin/library') or path.startswith('/admin/track') }}">library</a>
+    <a href="/admin/aired" class="{{ 'active' if path.startswith('/admin/aired') }}">aired</a>
     <a href="/admin/generate" class="{{ 'active' if path.startswith('/admin/generate') }}">generate</a>
     <a href="/admin/jobs" class="{{ 'active' if path.startswith('/admin/jobs') }}">jobs</a>
     <a href="/admin/prompts" class="{{ 'active' if path.startswith('/admin/prompts') }}">prompts</a>
