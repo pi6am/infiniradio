@@ -19,8 +19,10 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
   HTTP, so scaling later is just putting nginx/CDN in front of `/live`.
 - **Voting** — anonymous listeners up/downvote what they hear; scores use the Wilson
   lower bound so one upvote doesn't make a track a hit.
-- **Self-optimizing prompts** — the DJ picks style prompts by Thompson sampling over
-  each prompt's track votes.
+- **Self-optimizing prompts** — each prompt's selection weight is a configurable
+  base plus the average Wilson score of its aired tracks: quality steers generation
+  gently, and the per-track average prevents a prolific style from feeding back
+  into dominance.
 - **Variations** — every track's ABC score is kept; popular songs get re-rendered
   (optionally under a *different style prompt* = new instrumentation) with a fresh seed.
 - **Disk quota without waste** — when over quota, generation *pauses*. Unplayed audio is

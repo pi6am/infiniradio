@@ -319,12 +319,14 @@ async def prompts_page(request: Request):
     rt = request.app.state.rt
     prompts = []
     for p in rt.db.query("SELECT * FROM prompts ORDER BY name"):
-        a, b = dj.prompt_posterior(rt.db, p["id"])
+        stats = dj.prompt_air_stats(rt.db, p["id"])
         p = dict(p)
         p["tracks"] = rt.db.one(
             "SELECT COUNT(*) AS n FROM tracks WHERE prompt_id = ? AND status != 'deleted'",
             (p["id"],))["n"]
-        p["posterior"] = f"a={a - 1:.0f} b={b - 1:.0f}"
+        p["weight"] = round(dj.prompt_weight(rt.db, rt.cfg, p["id"]), 3)
+        p["avg_score"] = round(stats["avg_score"], 3)
+        p["aired"] = stats["aired"]
         prompts.append(p)
     return request.app.state.templates.TemplateResponse(
         request, "admin/prompts.html", _ctx(request, prompts=prompts))

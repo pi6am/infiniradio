@@ -70,6 +70,7 @@ DEFAULTS: dict[str, Any] = {
     "dj": {
         "max_queued_jobs": 1,
         "runway_minutes": 5.0,
+        "prompt_base_weight": 0.5,
         "repeat_window_tracks": 25,
         "repeat_window_hours": 6.0,
         "new_track_share": 0.35,
@@ -87,6 +88,10 @@ DEFAULTS: dict[str, Any] = {
 
 # key -> (default, cast, human label, help) — editable from the admin panel.
 RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
+    "dj.prompt_base_weight": (0.5, float, "Prompt selection base weight",
+                              "Every prompt's selection weight is this plus the average Wilson score of "
+                              "its aired tracks — gentle quality steering with a diversity floor (higher "
+                              "= more uniform selection)"),
     "dj.max_queued_jobs": (1, int, "Max queued generation jobs",
                            "Commission at most this many jobs ahead of the one running; keeps decisions "
                            "just-in-time (latest prompts and votes)"),

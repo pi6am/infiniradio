@@ -12,10 +12,13 @@ than dj.max_queued_jobs are waiting. This keeps every decision (prompt
 choice, variation vs fresh) informed by the latest prompts and listener
 votes, and grows the library until the repeat windows are comfortably
 satisfied; the disk-quota pause is the hard stop. Prompt choice is
-Thompson sampling over each prompt's tracks' votes (self-optimizing prompt
-library). With probability `dj.variation_rate` the job is a variation: a
-popular track's saved ABC re-rendered — possibly under a *different style
-prompt* (new instrumentation) and always with a fresh seed.
+diversity-safe: each prompt's selection weight is dj.prompt_base_weight plus
+the average Wilson score of its aired tracks — quality steers gently while
+the per-track average (not vote totals) prevents a numerous prompt from
+feeding back into more selections. With probability `dj.variation_rate` the
+job is a variation: a popular track's saved ABC re-rendered — possibly under
+a *different style prompt* (new instrumentation) and always with a fresh
+seed.
 """
 
 from __future__ import annotations
@@ -92,18 +95,34 @@ def eligible_without_fresh(eligible: list[dict]) -> list[dict]:
     return [r for r in eligible if r["play_count"] > 0]
 
 
-# ------------------------------------------------------------- prompt bandit
+# --------------------------------------------------------- prompt selection
 
-def prompt_posterior(db: DB, prompt_id: int) -> tuple[float, float]:
-    row = db.one(
-        "SELECT COALESCE(SUM(vote_up), 0) AS up, COALESCE(SUM(vote_down), 0) AS down"
-        " FROM tracks WHERE prompt_id = ? AND status IN ('ready', 'deleted')",
-        (prompt_id,),
-    ) or {"up": 0, "down": 0}
-    return 1.0 + row["up"], 1.0 + row["down"]
+def prompt_air_stats(db: DB, prompt_id: int) -> dict:
+    """Per-track listener verdicts for a prompt's AIRED tracks."""
+    rows = db.query(
+        "SELECT vote_up, vote_down FROM tracks"
+        " WHERE prompt_id = ? AND play_count > 0", (prompt_id,))
+    scores = [wilson_score(r["vote_up"], r["vote_down"]) for r in rows]
+    return {"aired": len(scores),
+            "avg_score": sum(scores) / len(scores) if scores else 0.0}
 
 
-def thompson_prompt(db: DB, exclude_prompt_id: int | None = None) -> dict | None:
+def prompt_weight(db: DB, cfg, prompt_id: int) -> float:
+    """dj.prompt_base_weight + mean Wilson score of the prompt's aired tracks.
+
+    Averaging *per track* (rather than summing votes) keeps the weight
+    independent of how many tracks a prompt already has: a prompt cannot
+    feed back into more selections just by being numerous — that aggregate
+    feedback loop let one or two styles dominate generation. The base
+    weight gives every prompt — including never-aired ones — a nonzero
+    exploration floor, so diversity never collapses to a single style.
+    """
+    base = runtime_get(cfg, db, "dj.prompt_base_weight")
+    return base + prompt_air_stats(db, prompt_id)["avg_score"]
+
+
+def pick_prompt(db: DB, cfg, exclude_prompt_id: int | None = None) -> dict | None:
+    """Soft diversity-weighted prompt choice (weight ~ base + avg score)."""
     prompts = db.query("SELECT * FROM prompts WHERE enabled = 1")
     if exclude_prompt_id is not None:
         others = [p for p in prompts if p["id"] != exclude_prompt_id]
@@ -111,12 +130,8 @@ def thompson_prompt(db: DB, exclude_prompt_id: int | None = None) -> dict | None
             prompts = others
     if not prompts:
         return None
-    scored = []
-    for p in prompts:
-        a, b = prompt_posterior(db, p["id"])
-        scored.append((random.betavariate(a, b), p))
-    scored.sort(key=lambda x: -x[0])
-    return scored[0][1]
+    weights = [prompt_weight(db, cfg, p["id"]) for p in prompts]
+    return random.choices(prompts, weights=weights, k=1)[0]
 
 
 def variation_parent(db: DB, cfg: Config) -> dict | None:
@@ -270,7 +285,7 @@ def _commission_one(rt, eligible_n: int, runway_s: float) -> bool:
     if random.random() < runtime_get(rt.cfg, rt.db, "dj.variation_rate"):
         parent = variation_parent(rt.db, rt.cfg)
         if parent:
-            prompt = thompson_prompt(rt.db, exclude_prompt_id=parent["prompt_id"])
+            prompt = pick_prompt(rt.db, rt.cfg, exclude_prompt_id=parent["prompt_id"])
             prompt_id = prompt["id"] if prompt else parent["prompt_id"]
             dup = rt.db.one(
                 "SELECT 1 FROM tracks WHERE parent_track_id = ? AND prompt_id = ?"
@@ -284,7 +299,7 @@ def _commission_one(rt, eligible_n: int, runway_s: float) -> bool:
                          runway_s / 60.0)
                 return True
 
-    prompt = thompson_prompt(rt.db)
+    prompt = pick_prompt(rt.db, rt.cfg)
     if prompt:
         enqueue_job(rt.db, prompt_id=prompt["id"])
         log.info("commissioned new track with prompt %r (runway %.1f min over "

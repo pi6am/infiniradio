@@ -13,16 +13,17 @@
       <a class="btn" href="/admin/prompts/edit">new prompt</a>
     </div>
   </div>
-  <p class="muted">The DJ samples prompts with a Thompson-sampling bandit (a/b ≈ up/down votes
-    across that prompt's tracks), so good styles earn more studio time.</p>
+  <p class="muted">Selection weight = <a href="/admin/settings">prompt base weight</a> + the average
+    Wilson score of that prompt's aired tracks — quality steers gently, and every prompt keeps a
+    nonzero floor so one style can't dominate by sheer volume.</p>
   <table>
-    <tr><th>name</th><th>enabled</th><th>tracks</th><th>votes (a/b)</th><th>used</th><th>last used</th><th></th></tr>
+    <tr><th>name</th><th>enabled</th><th>tracks</th><th>weight</th><th>used</th><th>last used</th><th></th></tr>
     {% for p in prompts %}
     <tr>
       <td><a href="/admin/prompts/edit/{{ p.id }}">{{ p.name }}</a></td>
       <td>{% if p.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</td>
       <td class="muted">{{ p.tracks }}</td>
-      <td class="muted">{{ p.posterior }}</td>
+      <td class="muted">{{ p.weight }} <span title="selection weight">(avg {{ p.avg_score }} · {{ p.aired }} aired)</span></td>
       <td class="muted">{{ p.times_used }}</td>
       <td class="muted">{{ p.last_used_at or '—' }}</td>
       <td>
