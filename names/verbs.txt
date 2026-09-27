@@ -3691,7 +3691,6 @@ trounce
 troupe
 truck
 trudge
-trump
 truncate
 truss
 trust

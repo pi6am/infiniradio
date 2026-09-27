@@ -22236,7 +22236,6 @@ scrivener
 scroll
 scrolls
 scrooge
-scrotum
 scrub
 scrubber
 scrubbers
@@ -26501,11 +26500,9 @@ true
 truffle
 truffles
 truism
-trump
 trumpet
 trumpeter
 trumpets
-trumps
 truncation
 trundle
 trunk
