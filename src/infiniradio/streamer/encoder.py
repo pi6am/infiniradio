@@ -4,6 +4,14 @@ Receives raw PCM (s16le / 48 kHz / stereo) on stdin and writes an fMP4 HLS
 live window into data/hls. The playlist is served with no-store; segments are
 immutable within the window and publicly cacheable, which is what makes the
 "put a CDN in front later" scalability story trivial.
+
+Every encoder life is a self-contained "generation": segment numbering is
+anchored to the persisted epoch (forward-only across lives, so clients never
+see a media-sequence regression), the fMP4 init segment has a per-life name
+(its URL must not repeat while cached), and the previous life's files are
+purged on start. Stitching lives together with append_list is what stalled
+surviving players across server restarts: they held cached init headers and
+buffered fragments from the old generation against segments of the new one.
 """
 
 from __future__ import annotations
@@ -40,6 +48,12 @@ class Encoder:
 
     def _args(self) -> list[str]:
         c = self.cfg
+        # Base every segment number on the epoch: media sequence numbers stay
+        # forward-only across encoder lives (a regression confuses players
+        # that remember buffered fragments), and filenames never repeat
+        # (segments are publicly cached). 10M segments per life at ~6s each
+        # is over two years of headroom.
+        seq_base = self.epoch * 10_000_000
         return [
             c.get("stream.ffmpeg_path", "ffmpeg"),
             "-hide_banner", "-loglevel", "warning",
@@ -48,9 +62,10 @@ class Encoder:
             "-f", "hls",
             "-hls_time", str(int(c.get("stream.segment_seconds", 6))),
             "-hls_list_size", str(int(c.get("stream.playlist_segments", 5))),
-            "-hls_flags", "+delete_segments+append_list+omit_endlist+independent_segments+program_date_time",
+            "-start_number", str(seq_base),
+            "-hls_flags", "+delete_segments+omit_endlist+independent_segments+program_date_time",
             "-hls_segment_type", "fmp4",
-            "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_fmp4_init_filename", f"init{self.epoch}.mp4",
             "-hls_segment_filename", str(self.hls_dir / "seg%06d.m4s"),
             str(self.hls_dir / "live.m3u8"),
         ]
@@ -59,6 +74,10 @@ class Encoder:
         self.hls_dir.mkdir(parents=True, exist_ok=True)
         if self.proc and self.proc.returncode is None:
             return
+        # The epoch must exist before the args are built (it anchors the
+        # segment numbering and the init filename).
+        self.epoch = self._next_epoch()
+        self._purge_stale()
         from datetime import datetime, timezone
         self.proc = await asyncio.create_subprocess_exec(
             *self._args(),
@@ -68,10 +87,24 @@ class Encoder:
         )
         self.started_at = time.monotonic()
         self.total_bytes = 0
-        self.epoch = self._next_epoch()
         self.started_wall = datetime.now(timezone.utc).replace(tzinfo=None)
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         log.info("HLS encoder started (pid %s, epoch %d)", self.proc.pid, self.epoch)
+
+    def _purge_stale(self) -> None:
+        """Remove the previous encoder life's output.
+
+        Each life writes a fresh playlist; files from an older life would
+        linger forever (delete_segments only manages the current window).
+        Clients still holding the old playlist see brief 404s and resync
+        via the new one.
+        """
+        for pattern in ("live*.m3u8", "seg*.m4s", "init*.mp4", "*.tmp"):
+            for p in self.hls_dir.glob(pattern):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass  # e.g. a Windows handle still open; next start retries
 
     def _next_epoch(self) -> int:
         """Globally unique epoch id for this encoder life.

@@ -18,7 +18,7 @@
 <script src="/static/hls.min.js"></script>
 <script>
 (function () {
-  const audio = document.getElementById('audio');
+  const audioEl = document.getElementById('audio');
   const elTitle = document.getElementById('np-title');
   const elMeta = document.getElementById('np-meta');
   const elVotes = document.getElementById('np-votes');
@@ -30,6 +30,7 @@
   let anchor = null;            // {pdt, at} — position on the server timeline
   let sched = null;             // last /api/schedule response
   let boundaryTimer = null;
+  let hlsRef = null;            // hls.js instance (null on native-HLS Safari)
   const pendingVotes = new Set();
 
   function playingPdt() {
@@ -214,7 +215,13 @@
     if (pdt == null) { anchor = null; return; }
     const head = playingPdt();
     if (head != null && pdt + 30000 < head) {
-      fetchSchedule();       // timeline jumped backwards: encoder reset
+      // Timeline jumped backwards: a new encoder life (server restart or
+      // skip/pause flush). Refetch the schedule for the new epoch and
+      // switch to a factory-fresh hls.js session (like a channel change):
+      // the old session's fragment history and timeline alignment span
+      // the generation seam and will step back into old-generation audio.
+      fetchSchedule();
+      rebuildStream();
     }
     anchor = { pdt: pdt, at: Date.now() };
   }
@@ -224,24 +231,57 @@
   });
 
   // ---- stream setup -----------------------------------------------------------
-  const src = '/live/live.m3u8';
-  if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-    audio.src = src;                       // Safari / native HLS (no PDT access)
-  } else if (window.Hls && Hls.isSupported()) {
+  function setupStream() {
+    const src = '/live/live.m3u8';
+    if (audioEl.canPlayType('application/vnd.apple.mpegurl')) {
+      audioEl.src = src;                     // Safari / native HLS: recovers on its own
+      return;
+    }
+    if (!window.Hls || !Hls.isSupported()) {
+      audioEl.replaceWith(document.createTextNode('Your browser cannot play HLS streams.'));
+      return;
+    }
     const hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20,
                           // A paused/backgrounded player can fall far behind
                           // the live edge; jump back to live rather than drift.
                           liveMaxLatencyDurationCount: 10 });
+    hlsRef = hls;
     hls.loadSource(src);
-    hls.attachMedia(audio);
+    hls.attachMedia(audioEl);
     hls.on(Hls.Events.FRAG_CHANGED, function (_e, data) { onFrag(data && data.frag); });
     hls.on(Hls.Events.ERROR, function (_e, data) {
-      if (data.fatal) setTimeout(function () { hls.startLoad(); }, 2000);
+      if (!data.fatal) return;
+      setTimeout(function () {
+        if (hlsRef !== hls) return;          // a rebuild replaced us already
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        else hls.startLoad();
+      }, 2000);
     });
-  } else {
-    audio.replaceWith(document.createTextNode('Your browser cannot play HLS streams.'));
   }
-  audio.play().catch(function () { /* autoplay blocked until user interacts */ });
+
+  let rebuilding = false;
+
+  // Channel-switch rebuild: a fresh hls.js session on the SAME <audio>
+  // element. The element is never replaced (recreating it would lose the
+  // user's playback/autoplay grant); only the session state is reset.
+  function rebuildStream() {
+    if (!hlsRef || rebuilding) return;
+    rebuilding = true;                       // debounce further jump detections
+    const old = hlsRef;
+    hlsRef = null;
+    anchor = null;                           // the old timeline is meaningless now
+    // Never tear hls.js down from inside its own event dispatch — defer,
+    // or the MediaSource ends up half-destroyed and the element wedges.
+    setTimeout(function () {
+      try { old.destroy(); } catch (e) { /* already gone */ }
+      rebuilding = false;
+      setupStream();
+      audioEl.play().catch(function () { /* paused: the controls remain */ });
+    }, 0);
+  }
+
+  setupStream();
+  audioEl.play().catch(function () { /* autoplay blocked until user interacts */ });
 
   fetchSchedule();
 })();
