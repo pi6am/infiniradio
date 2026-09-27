@@ -1,21 +1,42 @@
-"""Public site: player page, now-playing fragments, voting API, HLS files."""
+"""Public site: player page (JSON schedule + client-side rendering),
+voting API, and HLS file serving.
+
+The player polls /api/schedule once per song change (computed locally from
+the PDT timeline boundaries in the response) and updates the DOM itself;
+vote clicks are optimistic and reconciled via /api/vote. No server-rendered
+fragments are swapped into the page.
+"""
 
 from __future__ import annotations
 
 import logging
 import math
+import re
 import time
 import uuid
-from datetime import timedelta
+from datetime import timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+)
 
 from .. import library
 from ..config import runtime_get
 from ..db import DB
-from ..util import fmt_duration, human_bytes, iso, parse_iso, utcnow, wilson_score
+from ..util import (
+    epoch_ms,
+    fmt_duration,
+    iso,
+    parse_iso,
+    utcnow,
+    wilson_score,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,66 +84,95 @@ def track_public(row: dict, prompts: dict[int, str], my: dict[int, int]) -> dict
     }
 
 
-def now_playing(db: DB, cfg, listener_id: str, at_ms: float | None = None,
-                encoder=None) -> dict:
-    """Current + recent tracks.
+def _encoder(rt):
+    return rt.feeder.encoder if rt.feeder else None
 
-    at_ms: the caller's position on the HLS EXT-X-PROGRAM-DATE-TIME timeline
-    (epoch ms, server clock domain). When given and the encoder exposes the
-    timeline, tracks are matched by exact program offset — frame-accurate
-    voting regardless of player buffering. Otherwise we fall back to wall
-    clock against scheduled airtimes (approximate).
+
+def _parse_at(raw: str | None) -> float | None:
+    """Defensive parse of a client-reported timeline position (epoch ms).
+
+    Junk values ("null", "nan", ...) must never 422 an endpoint — they just
+    mean "no timeline information, use wall clock".
     """
-    prompts = _prompt_names(db)
-    my = library.my_votes(db, listener_id)
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) and v > 0 else None
 
-    mode = "clock"
+
+# ------------------------------------------------------------- schedule core
+
+def _schedule_rows(db: DB, cfg, listener_id: str, at_ms: float | None,
+                   encoder) -> tuple[str, float | None, list[dict]]:
+    """(mode, prog_at, rows) — the aired-tracks timeline, newest first.
+
+    Program mode matches tracks by exact program offset on the HLS PDT
+    timeline; if that yields nothing (e.g. an epoch the client has not
+    re-synced from yet) we self-heal to clock mode instead of returning an
+    empty timeline — the panels must never silently blank out.
+    """
+    mode, prog_at = "clock", None
     if (at_ms is not None and encoder is not None
             and getattr(encoder, "started_wall", None) is not None):
         try:
             # started_wall is naive UTC; timestamp() would read it as local
             # time, so attach UTC explicitly before converting to epoch.
-            from datetime import timezone as _tz
-            start_epoch = encoder.started_wall.replace(tzinfo=_tz.utc).timestamp()
+            start_epoch = encoder.started_wall.replace(tzinfo=timezone.utc).timestamp()
             prog_at = at_ms / 1000.0 - start_epoch
             if abs(prog_at - encoder.program_seconds()) < 6 * 3600:
                 mode = "program"
         except (TypeError, ValueError, OSError):
-            pass
+            prog_at = None
 
+    rows: list[dict] = []
     if mode == "program":
         rows = db.query(
             "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset, t.*"
             " FROM play_log p JOIN tracks t ON t.id = p.track_id"
             " WHERE p.epoch = ? AND p.prog_offset IS NOT NULL"
             " AND p.prog_offset <= ? AND t.status != 'deleted'"
-            " ORDER BY p.prog_offset DESC LIMIT 10",
+            " ORDER BY p.prog_offset DESC LIMIT 11",
             (encoder.epoch, prog_at),
         )
-        current = None
-        if rows:
-            r = rows[0]
-            if r["prog_offset"] + (r["duration_s"] or 1.0) > prog_at:
-                current = track_public(r, prompts, my)
-                current["airtime"] = r["airtime"]
-    else:
-        t = iso(utcnow())
+        if not rows:
+            mode = "clock"
+    if mode == "clock":
         rows = db.query(
-            "SELECT p.started_at AS airtime, t.* FROM play_log p"
-            " JOIN tracks t ON t.id = p.track_id"
+            "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset, t.*"
+            " FROM play_log p JOIN tracks t ON t.id = p.track_id"
             " WHERE p.started_at <= ? AND t.status != 'deleted'"
-            " ORDER BY p.started_at DESC LIMIT 10",
-            (t,),
+            " ORDER BY p.started_at DESC LIMIT 11",
+            (iso(utcnow()),),
         )
-        current = None
-        if rows:
-            r = rows[0]
-            end = parse_iso(r["airtime"]) + timedelta(seconds=r["duration_s"] or 1.0)
-            if end >= parse_iso(t):
-                current = track_public(r, prompts, my)
-                current["airtime"] = r["airtime"]
+    return mode, prog_at, rows
 
-    recent = [track_public(r, prompts, my) | {"airtime": r["airtime"]} for r in rows]
+
+def _pick_current(mode: str, prog_at: float | None, rows: list[dict]) -> dict | None:
+    if not rows:
+        return None
+    r = rows[0]
+    if mode == "program":
+        if r["prog_offset"] + (r["duration_s"] or 1.0) > prog_at:
+            return r
+    else:
+        end = parse_iso(r["airtime"]) + timedelta(seconds=r["duration_s"] or 1.0)
+        if end >= utcnow():
+            return r
+    return None
+
+
+def now_playing(db: DB, cfg, listener_id: str, at_ms: float | None = None,
+                encoder=None) -> dict:
+    """Compact now-playing summary (used by the admin dashboard)."""
+    mode, prog_at, rows = _schedule_rows(db, cfg, listener_id, at_ms, encoder)
+    prompts = _prompt_names(db)
+    my = library.my_votes(db, listener_id)
+    cur = _pick_current(mode, prog_at, rows)
+    current = track_public(cur, prompts, my) | {"airtime": cur["airtime"]} if cur else None
+    recent = [track_public(r, prompts, my) | {"airtime": r["airtime"]} for r in rows[:10]]
     return {
         "server_time": iso(utcnow()),
         "latency_hint": float(cfg.get("stream.latency_hint", 20.0)),
@@ -131,6 +181,52 @@ def now_playing(db: DB, cfg, listener_id: str, at_ms: float | None = None,
         "recent": recent,
     }
 
+
+def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
+                      encoder) -> dict:
+    """Full schedule for the player client, including each track's
+    boundaries on the PDT timeline so song changes are computed locally."""
+    mode, prog_at, rows = _schedule_rows(db, cfg, listener_id, at_ms, encoder)
+    prompts = _prompt_names(db)
+    my = library.my_votes(db, listener_id)
+    have_tl = (mode == "program" and encoder is not None
+               and getattr(encoder, "started_wall", None) is not None)
+
+    def entry(r: dict) -> dict:
+        d = track_public(r, prompts, my) | {"airtime": r["airtime"]}
+        if have_tl and r.get("prog_offset") is not None:
+            start_ms = (encoder.started_wall.replace(tzinfo=timezone.utc).timestamp()
+                        + r["prog_offset"]) * 1000.0
+            d["start_pdt_ms"] = round(start_ms)
+            d["end_pdt_ms"] = round(start_ms + (r["duration_s"] or 0.0) * 1000.0)
+        else:
+            d["start_pdt_ms"] = d["end_pdt_ms"] = None
+        return d
+
+    cur = _pick_current(mode, prog_at, rows)
+    return {
+        "server_time": iso(utcnow()),
+        "server_time_ms": epoch_ms(),
+        "sync": mode,
+        "epoch": encoder.epoch if encoder is not None else None,
+        "current": entry(cur) if cur else None,
+        "recent": [entry(r) for r in rows[:10]],
+    }
+
+
+# ------------------------------------------------------------------ pages
+
+@router.get("/", response_class=HTMLResponse)
+async def player(request: Request):
+    listener = ensure_listener(request)
+    resp = request.app.state.templates.TemplateResponse(request, "player.html",
+                                                        {"request": request})
+    if listener[1]:
+        _set_cookie(resp, listener[1])
+    return resp
+
+
+# ------------------------------------------------------------------ voting
 
 class _VoteLimiter:
     def __init__(self) -> None:
@@ -162,105 +258,6 @@ def _apply_vote(rt, request: Request, track_id: int, value: int,
     return library.apply_vote(rt.db, rt.cfg, track_id, lid, value)
 
 
-# ------------------------------------------------------------------ pages
-
-@router.get("/", response_class=HTMLResponse)
-async def player(request: Request):
-    rt = request.app.state.rt
-    listener = ensure_listener(request)
-    ctx = {
-        "request": request,
-        "np": now_playing(rt.db, rt.cfg, listener[0], encoder=_encoder(rt)),
-        "station": station_info(rt),
-    }
-    resp = request.app.state.templates.TemplateResponse(request, "player.html", ctx)
-    if listener[1]:
-        _set_cookie(resp, listener[1])
-    return resp
-
-
-def _encoder(rt):
-    return rt.feeder.encoder if rt.feeder else None
-
-
-def station_info(rt) -> dict:
-    cfg = rt.cfg
-    stats = rt.db.one(
-        "SELECT COALESCE(SUM(status = 'ready'), 0) AS ready,"
-        " COALESCE(SUM(protected = 1 AND status = 'ready'), 0) AS protected,"
-        " COALESCE(SUM(play_count), 0) AS plays FROM tracks"
-    ) or {"ready": 0, "protected": 0, "plays": 0}
-    usage = library.disk_usage(rt.db)
-    quota = int(runtime_get(cfg, rt.db, "library.quota_gb") * (1 << 30))
-    return {
-        "library_size": stats["ready"],
-        "protected": stats["protected"],
-        "total_plays": stats["plays"],
-        "disk": f"{human_bytes(usage)} / {human_bytes(quota)}",
-    }
-
-
-# ------------------------------------------------------------------ fragments
-
-@router.get("/nowplaying-card", response_class=HTMLResponse)
-async def nowplaying_card(request: Request, at: float | None = None):
-    rt = request.app.state.rt
-    listener = ensure_listener(request)
-    resp = request.app.state.templates.TemplateResponse(
-        request, "_nowplaying.html",
-        {"request": request,
-         "np": now_playing(rt.db, rt.cfg, listener[0], at_ms=at, encoder=_encoder(rt))},
-    )
-    if listener[1]:
-        _set_cookie(resp, listener[1])
-    return resp
-
-
-@router.post("/vote/{track_id}/{value}", response_class=HTMLResponse)
-async def vote_fragment(request: Request, track_id: int, value: int,
-                        at: str = Form("")):
-    rt = request.app.state.rt
-    listener = ensure_listener(request)
-    _apply_vote(rt, request, track_id, value, listener)
-    resp = request.app.state.templates.TemplateResponse(
-        request, "_nowplaying.html",
-        {"request": request,
-         "np": now_playing(rt.db, rt.cfg, listener[0], at_ms=_parse_at(at),
-                           encoder=_encoder(rt))},
-    )
-    if listener[1]:
-        _set_cookie(resp, listener[1])
-    return resp
-
-
-def _parse_at(raw: str | None) -> float | None:
-    """Defensive parse of a client-reported timeline position.
-
-    htmx form-encodes js-null as the string "null"; never let that (or any
-    other junk) 422 the vote endpoint — fall back to clock mode instead.
-    """
-    if not raw:
-        return None
-    try:
-        v = float(raw)
-    except (TypeError, ValueError):
-        return None
-    return v if math.isfinite(v) and v > 0 else None
-
-
-# ------------------------------------------------------------------ JSON API
-
-@router.get("/api/nowplaying")
-async def api_nowplaying(request: Request, at: float | None = None):
-    rt = request.app.state.rt
-    listener = ensure_listener(request)
-    data = now_playing(rt.db, rt.cfg, listener[0], at_ms=at, encoder=_encoder(rt))
-    resp = JSONResponse(data)
-    if listener[1]:
-        _set_cookie(resp, listener[1])
-    return resp
-
-
 @router.post("/api/vote")
 async def api_vote(request: Request):
     import json as _json
@@ -277,8 +274,56 @@ async def api_vote(request: Request):
         return JSONResponse({"error": "invalid vote"}, status_code=400)
     resp = JSONResponse({
         "track_id": row["id"], "vote_up": row["vote_up"], "vote_down": row["vote_down"],
-        "protected": bool(row["protected"]),
+        "my_vote": value, "protected": bool(row["protected"]),
+        "score": round(wilson_score(row["vote_up"], row["vote_down"]), 3),
     })
+    if listener[1]:
+        _set_cookie(resp, listener[1])
+    return resp
+
+
+# ------------------------------------------------------------------ JSON API
+
+@router.get("/api/schedule")
+async def api_schedule(request: Request, at: str | None = None):
+    """The aired-tracks timeline for the player client."""
+    rt = request.app.state.rt
+    listener = ensure_listener(request)
+    data = _schedule_payload(rt.db, rt.cfg, listener[0], _parse_at(at), _encoder(rt))
+    resp = JSONResponse(data)
+    if listener[1]:
+        _set_cookie(resp, listener[1])
+    return resp
+
+
+@router.get("/api/track/{track_id}/tally")
+async def api_tally(request: Request, track_id: int):
+    """Tiny per-track vote tally for the slow in-song refresh."""
+    rt = request.app.state.rt
+    listener = ensure_listener(request)
+    row = rt.db.one(
+        "SELECT id, vote_up, vote_down, protected FROM tracks"
+        " WHERE id = ? AND status != 'deleted'", (track_id,))
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    my = rt.db.one("SELECT value FROM votes WHERE track_id = ? AND listener_id = ?",
+                   (track_id, listener[0]))
+    resp = JSONResponse({
+        "track_id": track_id, "vote_up": row["vote_up"], "vote_down": row["vote_down"],
+        "my_vote": my["value"] if my else 0, "protected": bool(row["protected"]),
+    })
+    if listener[1]:
+        _set_cookie(resp, listener[1])
+    return resp
+
+
+@router.get("/api/nowplaying")
+async def api_nowplaying(request: Request, at: str | None = None):
+    rt = request.app.state.rt
+    listener = ensure_listener(request)
+    data = now_playing(rt.db, rt.cfg, listener[0], at_ms=_parse_at(at),
+                       encoder=_encoder(rt))
+    resp = JSONResponse(data)
     if listener[1]:
         _set_cookie(resp, listener[1])
     return resp
@@ -297,9 +342,7 @@ async def api_track(request: Request, track_id: int):
 
 # ------------------------------------------------------------------ HLS files
 
-import re as _re
-
-_PDT_TAIL = _re.compile(r"([+-]\d{2})(\d{2})$")
+_PDT_TAIL = re.compile(r"([+-]\d{2})(\d{2})$")
 
 
 def _fix_pdt_offsets(text: str) -> str:
@@ -330,7 +373,6 @@ async def live(request: Request, fname: str):
         return Response(status_code=404)
     if p.suffix == ".m3u8":
         # Playlists must never be cached, and their PDT offsets normalized.
-        from fastapi.responses import PlainTextResponse
         return PlainTextResponse(_fix_pdt_offsets(p.read_text(encoding="utf-8")),
                                  headers={"Cache-Control": "no-store"})
     # Segments are immutable for as long as they exist in the window.

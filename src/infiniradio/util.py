@@ -28,6 +28,11 @@ def iso_delta(seconds: float) -> str:
     return iso(utcnow() - timedelta(seconds=seconds))
 
 
+def epoch_ms() -> int:
+    """True epoch milliseconds (timezone-safe; utcnow() is naive)."""
+    return round(datetime.now(timezone.utc).timestamp() * 1000)
+
+
 def wilson_score(ups: int, downs: int, z: float = 1.96) -> float:
     """Lower bound of the Wilson score interval for the upvote ratio.
 

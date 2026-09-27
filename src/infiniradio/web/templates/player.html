@@ -4,60 +4,189 @@
 
 <section class="card">
   <audio id="audio" controls autoplay playsinline></audio>
-  <p class="muted" style="margin-bottom:0">
-    Live HLS broadcast — everyone hears the same program. Voting steers what
-    the DJ generates and keeps around.
-  </p>
+  <h2 style="margin:14px 0 4px">on air now</h2>
+  <div id="np-title" class="muted">warming up…</div>
+  <div id="np-meta" class="muted"></div>
+  <div id="np-votes" style="margin-top:10px"></div>
 </section>
 
-{% include "_nowplaying.html" %}
+<div class="card" id="np-recent-card" hidden>
+  <h2 style="margin-top:0">recently aired</h2>
+  <table><tbody id="np-recent-rows"></tbody></table>
+</div>
 
 <script src="/static/hls.min.js"></script>
 <script>
 (function () {
   const audio = document.getElementById('audio');
-  const src = '/live/live.m3u8';
-  let hls = null;
+  const elTitle = document.getElementById('np-title');
+  const elMeta = document.getElementById('np-meta');
+  const elVotes = document.getElementById('np-votes');
+  const elRows = document.getElementById('np-recent-rows');
+  const elRecentCard = document.getElementById('np-recent-card');
+  const RECENT_N = 10;
 
-  // --- exact now-playing sync ----------------------------------------------
-  // The playlist carries EXT-X-PROGRAM-DATE-TIME (server clock + program
-  // position). We anchor on each fragment we play and interpolate at 1x, so
-  // "at" is our position on the server's timeline. Clock skew never enters:
-  // the client clock only measures *elapsed* time.
-  let anchor = null;          // {pdt, at}
-  let lastRefresh = 0;
+  // ---- state ---------------------------------------------------------------
+  let anchor = null;            // {pdt, at} — position on the server timeline
+  let sched = null;             // last /api/schedule response
+  let boundaryTimer = null;
+  const pendingVotes = new Set();
 
   function playingPdt() {
     if (!anchor) return null;
     const v = anchor.pdt + (Date.now() - anchor.at);
     return Number.isFinite(v) ? Math.round(v) : null;
   }
-  window.__npAt = playingPdt;   // used by vote buttons (hx-vals) to stay synced
 
-  function refreshCard(force) {
-    const card = document.getElementById('np-card');
-    if (!card) return;
-    const now = Date.now();
-    if (!force && now - lastRefresh < 2000) return;
-    lastRefresh = now;
-    const at = playingPdt();
-    fetch('/nowplaying-card' + (at ? ('?at=' + at) : ''))
-      .then(r => r.text())
-      .then(html => {
-        const tmp = document.createElement('div');
-        tmp.innerHTML = html;
-        const fresh = tmp.querySelector('#np-card');
-        if (fresh) {
-          card.replaceWith(fresh);
-          // We inserted this outside htmx, so htmx has not bound the new
-          // vote buttons — without this they are inert after every refresh.
-          if (window.htmx) window.htmx.process(fresh);
-        }
-      })
-      .catch(() => {});
+  // ---- rendering (all text via textContent; DOM built by hand) -------------
+  function fmtDur(s) {
+    s = Math.round(s || 0);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   }
-  setInterval(() => refreshCard(false), 5000);
 
+  function metaLine(t) {
+    const bits = [t.prompt];
+    if (t.music_key) bits.push(t.music_key);
+    if (t.tempo) bits.push(t.tempo + ' BPM');
+    bits.push(fmtDur(t.duration_s));
+    if (t.is_variation) bits.push('variation');
+    if (t.protected) bits.push('listener favourite');
+    return bits.join(' · ');
+  }
+
+  function voteButton(t, dir) {
+    const b = document.createElement('button');
+    b.className = 'vote ' + (dir > 0 ? 'up' : 'down') +
+                  (t.my_vote === dir ? ' on' : '');
+    b.textContent = (dir > 0 ? '\u25b2 ' : '\u25bc ') +
+                    (dir > 0 ? t.vote_up : t.vote_down);
+    b.addEventListener('click', function () { vote(t, dir); });
+    return b;
+  }
+
+  function voteBox(t) {
+    const span = document.createElement('span');
+    span.className = 'votebox';
+    span.append(voteButton(t, 1), voteButton(t, -1));
+    return span;
+  }
+
+  function render() {
+    const cur = sched && sched.current;
+    if (cur) {
+      elTitle.textContent = cur.title;
+      elTitle.className = '';
+      elTitle.style.fontSize = '1.25rem';
+      elMeta.textContent = metaLine(cur);
+      elVotes.replaceChildren(voteBox(cur));
+    } else {
+      elTitle.textContent = 'warming up — the stream starts with the first generated track\u2026';
+      elTitle.className = 'muted';
+      elTitle.style.fontSize = '';
+      elMeta.textContent = '';
+      elVotes.replaceChildren();
+    }
+    const rec = ((sched && sched.recent) || []).slice(0, RECENT_N);
+    elRecentCard.hidden = rec.length === 0;
+    elRows.replaceChildren.apply(elRows, rec.map(function (t) {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td');
+      td1.append(document.createTextNode(t.title + ' '));
+      const m = document.createElement('span');
+      m.className = 'muted';
+      m.textContent = '· ' + t.prompt + (t.music_key ? ' · ' + t.music_key : '');
+      td1.append(m);
+      const td2 = document.createElement('td');
+      td2.className = 'muted right';
+      td2.style.whiteSpace = 'nowrap';
+      td2.textContent = fmtDur(t.duration_s);
+      const td3 = document.createElement('td');
+      td3.style.whiteSpace = 'nowrap';
+      td3.append(voteBox(t));
+      tr.append(td1, td2, td3);
+      return tr;
+    }));
+  }
+
+  // ---- voting: optimistic local update, reconciled by the server -----------
+  function vote(t, dir) {
+    if (pendingVotes.has(t.id)) return;
+    const val = (t.my_vote === dir) ? 0 : dir;
+    const prev = { up: t.vote_up, down: t.vote_down, my: t.my_vote };
+    t.vote_up = prev.up - (prev.my === 1) + (val === 1);
+    t.vote_down = prev.down - (prev.my === -1) + (val === -1);
+    t.my_vote = val;
+    render();
+    pendingVotes.add(t.id);
+    fetch('/api/vote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ track_id: t.id, value: val })
+    }).then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (res) {
+        t.vote_up = res.vote_up; t.vote_down = res.vote_down;
+        t.my_vote = res.my_vote;
+        if (res.protected) t.protected = true;
+      })
+      .catch(function () {
+        t.vote_up = prev.up; t.vote_down = prev.down; t.my_vote = prev.my;
+      })
+      .finally(function () { pendingVotes.delete(t.id); render(); });
+  }
+
+  // ---- schedule: one fetch per song change ----------------------------------
+  // The current track also appears in the recent list; canonicalize entries
+  // by track id so every rendering of a track shares ONE object — votes and
+  // tallies then update all of its buttons at once.
+  function adopt(s) {
+    const byId = {};
+    function canon(t) {
+      if (byId[t.id]) { Object.assign(byId[t.id], t); return byId[t.id]; }
+      byId[t.id] = t;
+      return t;
+    }
+    if (s.current) s.current = canon(s.current);
+    s.recent = (s.recent || []).map(canon);
+    return s;
+  }
+
+  function fetchSchedule() {
+    const at = playingPdt();
+    return fetch('/api/schedule' + (at ? ('?at=' + at) : ''))
+      .then(function (r) { return r.json(); })
+      .then(function (s) { sched = adopt(s); render(); armBoundary(); })
+      .catch(function () { armBoundary(); });
+  }
+
+  function armBoundary() {
+    clearTimeout(boundaryTimer);
+    const t = sched && sched.current;
+    let wait = 30000;                       // no timeline info -> slow poll
+    if (t && t.end_pdt_ms != null) {
+      const now = playingPdt() != null ? playingPdt() : Date.now();
+      wait = Math.max(2000, t.end_pdt_ms - now + 1500);  // just past the boundary
+    }
+    boundaryTimer = setTimeout(fetchSchedule, wait);
+  }
+
+  // ---- slow tally refresh for the current track -----------------------------
+  setInterval(function () {
+    const t = sched && sched.current;
+    if (!t || pendingVotes.has(t.id)) return;
+    fetch('/api/track/' + t.id + '/tally')
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (sched && sched.current && sched.current.id === res.track_id) {
+          sched.current.vote_up = res.vote_up;
+          sched.current.vote_down = res.vote_down;
+          sched.current.my_vote = res.my_vote;
+          if (res.protected) sched.current.protected = true;
+          render();
+        }
+      }).catch(function () {});
+  }, 30000);
+
+  // ---- timeline anchor -------------------------------------------------------
   function parsePdt(frag) {
     if (!frag) return null;
     if (Number.isFinite(frag.programDateTime) && frag.programDateTime > 0)
@@ -76,22 +205,27 @@
 
   function onFrag(frag) {
     const pdt = parsePdt(frag);
-    if (pdt !== null) {
-      anchor = { pdt: pdt, at: Date.now() };
-      refreshCard(true);
-    } else {
-      anchor = null;   // no timeline info -> server falls back to wall clock
+    if (pdt == null) { anchor = null; return; }
+    const head = playingPdt();
+    if (head != null && pdt + 30000 < head) {
+      fetchSchedule();       // timeline jumped backwards: encoder reset
     }
+    anchor = { pdt: pdt, at: Date.now() };
   }
 
-  // --- stream setup ----------------------------------------------------------
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) fetchSchedule();
+  });
+
+  // ---- stream setup -----------------------------------------------------------
+  const src = '/live/live.m3u8';
   if (audio.canPlayType('application/vnd.apple.mpegurl')) {
     audio.src = src;                       // Safari / native HLS (no PDT access)
   } else if (window.Hls && Hls.isSupported()) {
-    hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20,
-                    // A paused/backgrounded player can fall far behind the
-                    // live edge; jump back to live rather than drifting.
-                    liveMaxLatencyDurationCount: 10 });
+    const hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20,
+                          // A paused/backgrounded player can fall far behind
+                          // the live edge; jump back to live rather than drift.
+                          liveMaxLatencyDurationCount: 10 });
     hls.loadSource(src);
     hls.attachMedia(audio);
     hls.on(Hls.Events.FRAG_CHANGED, function (_e, data) { onFrag(data && data.frag); });
@@ -102,6 +236,8 @@
     audio.replaceWith(document.createTextNode('Your browser cannot play HLS streams.'));
   }
   audio.play().catch(function () { /* autoplay blocked until user interacts */ });
+
+  fetchSchedule();
 })();
 </script>
 {% endblock %}

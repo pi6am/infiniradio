@@ -76,7 +76,9 @@
   footer { text-align: center; color: var(--muted); font-size: 13px; padding: 20px; }
   .right { text-align: right; }
 </style>
+{% if request.url.path.startswith('/admin') %}
 <script src="/static/htmx.min.js"></script>
+{% endif %}
 </head>
 <body>
 <header>
