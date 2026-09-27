@@ -31,6 +31,7 @@
   let sched = null;             // last /api/schedule response
   let boundaryTimer = null;
   let hlsRef = null;            // hls.js instance (null on native-HLS Safari)
+  let streamEpoch = null;       // encoder life id, parsed from segment URLs
   const pendingVotes = new Set();
 
   function playingPdt() {
@@ -210,20 +211,30 @@
     return null;
   }
 
+  function fragEpoch(url) {
+    const m = /\/seg(\d+)-/.exec(url || '');
+    return m ? m[1] : null;
+  }
+
   function onFrag(frag) {
+    const ep = fragEpoch(frag && frag.url);
+    if (ep !== null && streamEpoch === null) streamEpoch = ep;
     const pdt = parsePdt(frag);
-    if (pdt == null) { anchor = null; return; }
     const head = playingPdt();
-    if (head != null && pdt + 30000 < head) {
-      // Timeline jumped backwards: a new encoder life (server restart or
-      // skip/pause flush). Refetch the schedule for the new epoch and
-      // switch to a factory-fresh hls.js session (like a channel change):
-      // the old session's fragment history and timeline alignment span
-      // the generation seam and will step back into old-generation audio.
+    const jumpedBack = pdt != null && head != null && pdt + 30000 < head;
+    if ((ep !== null && streamEpoch !== null && ep !== streamEpoch) || jumpedBack) {
+      // A new encoder life (server restart or skip/pause flush). Each life
+      // restarts its media sequence at 0, so the URL epoch is the reliable
+      // signal; a large backward PDT jump is the fallback. Switch to a
+      // factory-fresh session: the old one's fragment history and timeline
+      // alignment span the generation seam and would step back into
+      // old-generation audio (segments stay browser-cached for minutes).
+      if (ep !== null) streamEpoch = ep;
       fetchSchedule();
       rebuildStream();
+      return;
     }
-    anchor = { pdt: pdt, at: Date.now() };
+    anchor = pdt == null ? null : { pdt: pdt, at: Date.now() };
   }
 
   document.addEventListener('visibilitychange', function () {

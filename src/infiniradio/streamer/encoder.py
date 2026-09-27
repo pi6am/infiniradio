@@ -5,13 +5,15 @@ live window into data/hls. The playlist is served with no-store; segments are
 immutable within the window and publicly cacheable, which is what makes the
 "put a CDN in front later" scalability story trivial.
 
-Every encoder life is a self-contained "generation": segment numbering is
-anchored to the persisted epoch (forward-only across lives, so clients never
-see a media-sequence regression), the fMP4 init segment has a per-life name
-(its URL must not repeat while cached), and the previous life's files are
-purged on start. Stitching lives together with append_list is what stalled
-surviving players across server restarts: they held cached init headers and
-buffered fragments from the old generation against segments of the new one.
+Every encoder life is a self-contained "generation": the fMP4 init segment
+and segment filenames carry the epoch (a URL must never serve bytes from
+two generations — segments are publicly cached), the previous life's files
+are purged on start, and each life's playlist starts its media sequence at
+0 like any fresh stream (huge sequence bases poison players' duration
+math). Sequence regression across lives is safe because clients rebuild
+their playback session when the URL epoch changes; stitching lives
+together with append_list is what stalled surviving players across server
+restarts.
 """
 
 from __future__ import annotations
@@ -48,12 +50,6 @@ class Encoder:
 
     def _args(self) -> list[str]:
         c = self.cfg
-        # Base every segment number on the epoch: media sequence numbers stay
-        # forward-only across encoder lives (a regression confuses players
-        # that remember buffered fragments), and filenames never repeat
-        # (segments are publicly cached). 10M segments per life at ~6s each
-        # is over two years of headroom.
-        seq_base = self.epoch * 10_000_000
         return [
             c.get("stream.ffmpeg_path", "ffmpeg"),
             "-hide_banner", "-loglevel", "warning",
@@ -62,11 +58,14 @@ class Encoder:
             "-f", "hls",
             "-hls_time", str(int(c.get("stream.segment_seconds", 6))),
             "-hls_list_size", str(int(c.get("stream.playlist_segments", 5))),
-            "-start_number", str(seq_base),
+            # Media sequence starts at 0 (a 10M base reads as ~694 days of
+            # media in players' duration math); generation isolation lives
+            # in the URLs instead: the epoch prefixes every segment and
+            # init filename, so cached bytes can never cross generations.
             "-hls_flags", "+delete_segments+omit_endlist+independent_segments+program_date_time",
             "-hls_segment_type", "fmp4",
             "-hls_fmp4_init_filename", f"init{self.epoch}.mp4",
-            "-hls_segment_filename", str(self.hls_dir / "seg%06d.m4s"),
+            "-hls_segment_filename", str(self.hls_dir / f"seg{self.epoch}-%06d.m4s"),
             str(self.hls_dir / "live.m3u8"),
         ]
 
