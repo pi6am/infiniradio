@@ -79,6 +79,12 @@
       elTitle.style.fontSize = '1.25rem';
       elMeta.textContent = metaLine(cur);
       elVotes.replaceChildren(voteBox(cur));
+    } else if (sched && sched.playback_paused) {
+      elTitle.textContent = '\u23f8 station paused \u2014 silence on air\u2026';
+      elTitle.className = 'muted';
+      elTitle.style.fontSize = '';
+      elMeta.textContent = '';
+      elVotes.replaceChildren();
     } else {
       elTitle.textContent = 'warming up — the stream starts with the first generated track\u2026';
       elTitle.className = 'muted';

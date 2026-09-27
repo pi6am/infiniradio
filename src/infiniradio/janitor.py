@@ -41,6 +41,13 @@ def quota_state(db: DB, cfg: Config) -> dict:
 
 
 def generation_paused(db: DB, cfg: Config) -> tuple[bool, str]:
+    """Why (not whether) commissioning is currently paused.
+
+    Two independent causes: the admin-panel pause switch (manual, sticky
+    across restarts) and the disk quota (automatic, with hysteresis).
+    """
+    if db.get_setting("generation_paused"):
+        return True, "paused from the admin panel"
     st = quota_state(db, cfg)
     return st["paused"], st["reason"]
 

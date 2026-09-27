@@ -135,6 +135,8 @@ async def dashboard(request: Request):
         if row:
             feeder_track = row["title"]
 
+    gen_paused, gen_reason = janitor.generation_paused(db, cfg)
+
     np = now_playing(db, cfg, "admin")
     queue = db.query(
         "SELECT q.id AS qid, q.queued_at, t.id AS track_id, t.title, t.duration_s,"
@@ -147,6 +149,10 @@ async def dashboard(request: Request):
         _ctx(request,
              np=np, quota=quota, stats=stats, gen=gen_status, jobs=jobs,
              feeder_track=feeder_track, queue=queue,
+             gen_manual_paused=bool(db.get_setting("generation_paused")),
+             gen_paused=gen_paused, gen_reason=gen_reason,
+             playback_paused=bool(db.get_setting("playback_paused")),
+             has_generator=rt.generator is not None,
              queued_s=round(rt.feeder.encoder.queued_seconds(), 1) if rt.feeder else 0,
              uptime_s=int((utcnow() - rt.started).total_seconds()),
              usage_fmt=human_bytes(quota["usage"]), quota_fmt=human_bytes(quota["quota"])))
@@ -250,6 +256,58 @@ async def skip_current(request: Request, csrf: str = Form("")):
     rt = request.app.state.rt
     if rt.feeder and rt.feeder.request_skip():
         log.info("skip requested from admin panel")
+    return RedirectResponse(_back(request, "/admin"), status_code=303)
+
+
+@router.post("/generation/pause")
+async def generation_pause(request: Request, csrf: str = Form("")):
+    """Stop automatic commissioning (queued/running jobs still finish)."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    rt.db.set_setting("generation_paused", True)
+    log.info("generation paused from admin panel")
+    return RedirectResponse(_back(request, "/admin"), status_code=303)
+
+
+@router.post("/generation/resume")
+async def generation_resume(request: Request, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    rt.db.set_setting("generation_paused", False)
+    log.info("generation resumed from admin panel")
+    return RedirectResponse(_back(request, "/admin"), status_code=303)
+
+
+@router.post("/playback/pause")
+async def playback_pause(request: Request, csrf: str = Form("")):
+    """Cut to silence now and stay silent until resumed.
+
+    Setting the flag alone would only take effect at the next track
+    boundary (and up to MAX_LEAD_S of audio is already buffered), so we
+    also skip the current track out of the buffer — the same flush a
+    manual skip performs. The encoder keeps running; listeners hear
+    silence instead of a stalled stream and stay connected.
+    """
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    rt.db.set_setting("playback_paused", True)
+    if rt.feeder and rt.feeder.request_skip():
+        log.info("playback paused from admin panel (cut current track)")
+    else:
+        log.info("playback paused from admin panel (nothing airing)")
+    return RedirectResponse(_back(request, "/admin"), status_code=303)
+
+
+@router.post("/playback/resume")
+async def playback_resume(request: Request, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    rt.db.set_setting("playback_paused", False)
+    log.info("playback resumed from admin panel")
     return RedirectResponse(_back(request, "/admin"), status_code=303)
 
 
@@ -486,8 +544,21 @@ async def job_retry(request: Request, job_id: int, csrf: str = Form("")):
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    rt.db.execute("UPDATE generation_jobs SET status = 'queued', error = NULL,"
-                  " finished_at = NULL WHERE id = ? AND status = 'failed'", (job_id,))
+    job = rt.db.one("SELECT * FROM generation_jobs WHERE id = ?", (job_id,))
+    if job and job["status"] == "failed":
+        # Drop the failed placeholder row (it never produced audio) so
+        # retries don't accumulate dead rows; the runner creates a fresh
+        # track when the job restarts. Clear the FK before deleting.
+        if job["track_id"]:
+            t = rt.db.one("SELECT status FROM tracks WHERE id = ?", (job["track_id"],))
+            if t and t["status"] == "failed":
+                rt.db.execute("UPDATE generation_jobs SET track_id = NULL"
+                              " WHERE id = ?", (job_id,))
+                rt.db.execute("DELETE FROM tracks WHERE id = ? AND status = 'failed'",
+                              (job["track_id"],))
+        rt.db.execute("UPDATE generation_jobs SET status = 'queued', error = NULL,"
+                      " finished_at = NULL"
+                      " WHERE id = ? AND status = 'failed'", (job_id,))
     return RedirectResponse("/admin/jobs", status_code=303)
 
 
@@ -505,6 +576,13 @@ async def job_cancel(request: Request, job_id: int, csrf: str = Form("")):
             await rt.generator.interrupt()
         rt.db.execute("UPDATE generation_jobs SET status = 'cancelled',"
                       " finished_at = ? WHERE id = ?", (iso(utcnow()), job_id))
+        # The placeholder track would otherwise count as "generating"
+        # forever; fail_track only touches it if it is still generating, so
+        # a generation that completed concurrently stays ready.
+        if job["track_id"]:
+            library.fail_track(rt.db, job["track_id"])
+        log.info("cancelled running job %s (track %s finalized)",
+                 job_id, job["track_id"])
     return RedirectResponse("/admin/jobs", status_code=303)
 
 

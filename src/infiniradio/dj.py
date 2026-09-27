@@ -201,6 +201,28 @@ def build_request(db: DB, job: dict) -> GenRequest:
 
 # ------------------------------------------------------------- background loops
 
+def reconcile_stale_jobs(db: DB) -> None:
+    """Finalize state left behind by a crash or kill — call once at startup.
+
+    Nothing can legitimately be running at boot: the job runner only claims
+    queued jobs, and a placeholder track exists only while its job runs.
+    So any 'running' job or 'generating' track belongs to the previous
+    process. Fail both; queued jobs survive and run normally.
+    """
+    n_jobs = db.one("SELECT COUNT(*) AS n FROM generation_jobs WHERE status = 'running'")["n"]
+    if n_jobs:
+        db.execute(
+            "UPDATE generation_jobs SET status = 'failed',"
+            " error = 'interrupted by server restart', finished_at = ?"
+            " WHERE status = 'running'", (iso(utcnow()),))
+    n_tracks = db.one("SELECT COUNT(*) AS n FROM tracks WHERE status = 'generating'")["n"]
+    if n_tracks:
+        db.execute("UPDATE tracks SET status = 'failed' WHERE status = 'generating'")
+    if n_jobs or n_tracks:
+        log.warning("startup reconciliation: failed %d stale running job(s) and"
+                    " %d orphaned generating track(s)", n_jobs, n_tracks)
+
+
 async def job_runner(rt) -> None:
     """Serially process queued generation jobs."""
     log.info("job runner started (backend: %s)", rt.generator.name if rt.generator else "off")
@@ -230,15 +252,17 @@ async def job_runner(rt) -> None:
                          if job["parent_track_id"] else "new track (seed %s)" % req.seed)
                 result = await rt.generator.generate(req, library.track_dir(cfg, track_id))
                 await library.ingest(db, cfg, track_id, result)
+                # Conditional on 'running': if the job was cancelled from the
+                # admin panel while we were generating, the cancellation wins.
                 db.execute("UPDATE generation_jobs SET status = 'done', finished_at = ?,"
-                           " comfy_prompt_id = ? WHERE id = ?",
+                           " comfy_prompt_id = ? WHERE id = ? AND status = 'running'",
                            (iso(utcnow()), str(result.info.get("comfy_prompt_id", "")), job["id"]))
             except Exception as exc:
                 log.exception("job %s failed", job["id"])
                 if track_id:
                     library.fail_track(db, track_id)
                 db.execute("UPDATE generation_jobs SET status = 'failed', error = ?,"
-                           " finished_at = ? WHERE id = ?",
+                           " finished_at = ? WHERE id = ? AND status = 'running'",
                            (str(exc)[:1000], iso(utcnow()), job["id"]))
         except asyncio.CancelledError:
             raise

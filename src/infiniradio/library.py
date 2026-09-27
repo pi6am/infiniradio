@@ -157,7 +157,13 @@ def delete_track(db: DB, cfg: Config, track_id: int) -> bool:
 
 
 def fail_track(db: DB, track_id: int) -> None:
-    db.execute("UPDATE tracks SET status = 'failed' WHERE id = ?", (track_id,))
+    """Mark a still-generating track failed.
+
+    Guarded on status so a stale cancellation cannot clobber a track that
+    concurrently finished ingesting (or was already deleted).
+    """
+    db.execute("UPDATE tracks SET status = 'failed'"
+               " WHERE id = ? AND status = 'generating'", (track_id,))
 
 
 # ---------------------------------------------------------------- votes & plays

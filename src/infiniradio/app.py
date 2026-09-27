@@ -119,6 +119,10 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
         (data_dir / "hls").mkdir(parents=True, exist_ok=True)
         db = DB(data_dir / "infiniradio.db")
         library.import_prompts(db, cfg)
+        # Nothing runs yet: fail jobs/tracks orphaned by a previous crash
+        # (a 'running' job is never re-claimed, and its placeholder track
+        # would count as "generating" forever).
+        dj.reconcile_stale_jobs(db)
 
         generator = make_generator(cfg, backend)
         app.state.sessions = auth.Sessions(auth.get_server_secret(db, cfg))

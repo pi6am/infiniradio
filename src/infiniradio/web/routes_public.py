@@ -209,6 +209,7 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
         "server_time_ms": epoch_ms(),
         "sync": mode,
         "epoch": encoder.epoch if encoder is not None else None,
+        "playback_paused": bool(db.get_setting("playback_paused")),
         "current": entry(cur) if cur else None,
         "recent": [entry(r) for r in rows[:10]],
     }

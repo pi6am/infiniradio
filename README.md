@@ -29,7 +29,9 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
   never auto-deleted; eviction only touches played tracks (most-downvoted first).
   ABC text always survives.
 - **Admin panel** — dashboard, library browser (listen/view ABC/lineage), prompt CRUD,
-  job control, runtime settings. Single admin account, scrypt password.
+  job control, runtime settings, plus pause switches for generation and playback
+  (paused playback airs silence so the stream stays live). Single admin account,
+  scrypt password.
 - **Cross-platform** — Linux/macOS/Windows, no named pipes or OS-specific tricks;
   the only external dependency is **ffmpeg**.
 

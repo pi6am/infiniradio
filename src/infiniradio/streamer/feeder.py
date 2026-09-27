@@ -7,7 +7,10 @@ its computed *airtime* (now + queued audio), which is what the now-playing API
 reports against the latency hint.
 
 If the DJ has nothing to offer, real silence is written so the stream never
-dies.
+dies. The admin-panel playback pause uses the same mechanism: the current
+track is skipped out of the buffer (encoder restart, players resync within
+seconds) and deliberate silence follows until playback is resumed — the
+encoder keeps running the whole time, so listeners stay connected.
 """
 
 from __future__ import annotations
@@ -52,6 +55,11 @@ class Feeder:
 
     # -- manual queue & skip -------------------------------------------------
 
+    @property
+    def playback_paused(self) -> bool:
+        """Admin-panel pause switch (persisted; sticky across restarts)."""
+        return bool(self.rt.db.get_setting("playback_paused"))
+
     def _listener_lag(self) -> float:
         """How far listeners trail what we write into the encoder.
 
@@ -95,6 +103,9 @@ class Feeder:
         log.info("feeder running; live playlist at %s", self.encoder.hls_dir / "live.m3u8")
         while True:
             try:
+                if self.playback_paused:
+                    await self._feed_silence(paused=True)
+                    continue
                 track = self._pop_queue() or dj.pick_next(
                     self.rt.db, self.cfg,
                     exclude_ids=self.active_ids | self.queued_ids(),
@@ -132,16 +143,28 @@ class Feeder:
                 return
             await asyncio.sleep(min(lead - MAX_LEAD_S, 5.0))
 
-    async def _feed_silence(self) -> None:
+    async def _feed_silence(self, paused: bool = False) -> None:
+        """Air real silence so the stream never dies.
+
+        Deliberate pause (admin panel) is a quiet info log — the empty-
+        library case stays a warning with periodic reminders, since it
+        means the DJ has run out of eligible material.
+        """
         now = time.monotonic()
         if self._silence_since is None:
             self._silence_since = now
-            log.warning("feeder: nothing eligible to play — airing silence")
-        elif now - self._silence_since > SILENCE_WARN_EVERY_S:
+            if paused:
+                log.info("playback paused — airing silence")
+            else:
+                log.warning("feeder: nothing eligible to play — airing silence")
+        elif not paused and now - self._silence_since > SILENCE_WARN_EVERY_S:
             self._silence_since = now
             log.warning("feeder: still silent (empty library?)")
         bps = self.encoder.bytes_per_second
         chunk = b"\x00" * (bps // 4)  # 0.25 s
+        # Respect the same lead budget as tracks: a multi-hour pause must not
+        # stuff the encoder with hours of buffered silence.
+        await self._pace()
         await self.encoder.write(chunk)
         await asyncio.sleep(0.2)
 

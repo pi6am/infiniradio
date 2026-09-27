@@ -12,6 +12,27 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button type="submit">⏭ skip current (flushes buffer)</button>
   </form>
+  {% if playback_paused %}
+  <form method="post" action="/admin/playback/resume" class="inline" style="margin-left:8px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">▶ resume playback</button>
+  </form>
+  {% else %}
+  <form method="post" action="/admin/playback/pause" class="inline" style="margin-left:8px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" title="cut to silence now (flushes the buffer); listeners stay connected">⏸ pause playback</button>
+  </form>
+  {% endif %}
+</div>
+{% elif playback_paused %}
+<div class="card">
+  <h2 style="margin-top:0">on air</h2>
+  <b>⏸ playback paused</b>
+  <span class="muted">— airing silence; the stream stays live and listeners stay connected</span>
+  <form method="post" action="/admin/playback/resume" class="inline" style="margin-left:12px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">▶ resume playback</button>
+  </form>
 </div>
 {% else %}
 <div class="card muted">nothing has aired yet (waiting for the first ready track)</div>
@@ -73,6 +94,22 @@
         <span class="muted">{{ gen.sidecar.files }} files · {{ (gen.sidecar.bytes / 1048576) | round(1) }} MiB ·
           {{ (gen.sidecar.disk_free / 1073741824) | round(1) }} GiB free on GPU box</span>
       {% endif %}
+    {% endif %}
+    {% if gen_manual_paused %}
+      <p style="color:var(--bad);margin:8px 0 4px">generation paused (admin) — automatic commissioning off;
+        queued/running jobs still finish</p>
+      <form method="post" action="/admin/generation/resume" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit">▶ resume generation</button>
+      </form>
+    {% elif has_generator %}
+      <form method="post" action="/admin/generation/pause" class="inline" style="margin-top:8px">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" title="stop automatic commissioning; queued/running jobs still finish">⏸ pause generation</button>
+      </form>
+    {% endif %}
+    {% if gen_paused and not gen_manual_paused %}
+      <p style="color:var(--bad);margin:8px 0 0">generation paused: {{ gen_reason }}</p>
     {% endif %}
   </div>
 </div>
