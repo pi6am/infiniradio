@@ -95,7 +95,8 @@ at a real GPU.
    cleanup_every_n = 1
    ```
 
-   The server triggers cleanup before every Nth submission.
+   The server triggers cleanup before every Nth submission. To run it as a
+   systemd service on the ComfyUI machine, see DEPLOY.md §5.
 
 The server downloads each job's audio + ABC via the ComfyUI API (`/prompt`, `/history`,
 `/view`) into its own `data/music/<track_id>/` — no shared filesystem required.
@@ -119,11 +120,10 @@ data/                runtime: SQLite DB, music/<id>/{original, playout.m4a, scor
 
 ## Deployment
 
-- **Linux**: systemd unit running `/path/to/venv/bin/python -m infiniradio`
-- **Windows**: NSSM service or Task Scheduler entry
-- **macOS**: launchd agent
-- Put a reverse proxy (nginx/caddy) in front for TLS. Serve `/live` statically with
-  caching to scale to many listeners; everything else stays on the app.
+See **[DEPLOY.md](DEPLOY.md)** for the full guide: fresh install on a Linux
+box, running as a systemd service, migrating an existing station to new
+hardware, LAN access, and exposing the station to the internet through a
+Cloudflare Tunnel.
 
 Env overrides: `INFINIRADIO__SECTION__KEY=value` (e.g. `INFINIRADIO__COMFYUI__URL`).
 Config path: `--config X` or `INFINIRADIO_CONFIG`.

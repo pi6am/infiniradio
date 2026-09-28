@@ -1,0 +1,40 @@
+# infiniradio systemd service unit.
+#
+# Install (see DEPLOY.md §3):
+#   sudo cp deploy/infiniradio.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now infiniradio
+#
+# If you installed somewhere other than /opt/infiniradio or under a different
+# user, adjust WorkingDirectory, User, Group, ExecStart and ReadWritePaths.
+
+[Unit]
+Description=infiniradio — infinite AI radio station
+Documentation=file:///opt/infiniradio/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=infiniradio
+Group=infiniradio
+
+# The app resolves config.toml, names/, prompts/, workflow/ and data/ relative
+# to its working directory — this MUST be the repo root.
+WorkingDirectory=/opt/infiniradio
+ExecStart=/opt/infiniradio/.venv/bin/python -m infiniradio
+
+# Crash → restart (a restart resumes the interrupted song mid-stream);
+# clean stops ("systemctl stop") are never restarted.
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# Light hardening: the app only ever writes inside its own tree.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/infiniradio
+
+[Install]
+WantedBy=multi-user.target

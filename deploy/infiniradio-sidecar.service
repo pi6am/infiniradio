@@ -1,0 +1,42 @@
+# infiniradio ComfyUI cleanup sidecar — runs ON THE COMFYUI MACHINE.
+#
+# Install (see DEPLOY.md §5):
+#   sudo cp deploy/infiniradio-sidecar.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now infiniradio-sidecar
+#
+# BEFORE enabling:
+#   * Set User=/Group= to the account that owns ComfyUI's output directory
+#     (deletions happen as that user) — often the user ComfyUI runs as.
+#   * Create /etc/infiniradio-sidecar.env (chmod 600, root-owned):
+#         DIR=/path/to/ComfyUI/output/radio
+#         TOKEN=<openssl rand -hex 32>
+#         PORT=8765
+#     Secrets live there, not in this world-readable unit file.
+#   * If ComfyUI and the radio server share a machine, switch --host to
+#     127.0.0.1; otherwise 0.0.0.0 is required so the radio server can
+#     reach it (requests are token-gated).
+
+[Unit]
+Description=infiniradio ComfyUI cleanup sidecar
+Documentation=file:///opt/infiniradio-sidecar/comfyui_cleanup.py
+After=network.target
+
+[Service]
+Type=simple
+User=comfy
+Group=comfy
+
+EnvironmentFile=/etc/infiniradio-sidecar.env
+ExecStart=/usr/bin/python3 /opt/infiniradio-sidecar/comfyui_cleanup.py \
+    --dir ${DIR} --token ${TOKEN} --host 0.0.0.0 --port ${PORT}
+
+Restart=on-failure
+RestartSec=5
+
+# Hardening is kept light because the watched directory can live anywhere
+# (often under /home). NoNewPrivileges/PrivateTmp are safe everywhere.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
