@@ -108,6 +108,17 @@ through a switch. For a variation we flip the switch and inject the parent's sav
 the ABC-generation pass is skipped and the score is re-rendered with the chosen style
 prompt and a new seed.
 
+### The ABC sanity gate
+
+Fresh songs are generated in two passes. First a text-only planning
+pass produces an ABC score. While its length is outside configurable
+bounds we retry with a different seed. Otherwise we render audio
+using this ABC.
+
+Use `python -m infiniradio.abc_audit --library --vs-votes` to check
+the configuration against generated songs. Thresholds live under
+`[abc_audit]` in the config.
+
 ## Layout
 
 ```

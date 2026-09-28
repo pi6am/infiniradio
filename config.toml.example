@@ -50,7 +50,17 @@ lyrics = "33:37"
 seed = "33:34"
 plan = "33:31"            # boolean: generate a new ABC plan (true) or use supplied ABC
 abc = "33:32"             # supplied ABC text (used when plan = false)
+abc_save = "43"           # SaveText node — the planning pass keeps it and its upstream nodes
 audio_save = "10"         # SaveAudioAdvanced node (format patched per audio_format)
+
+# Two-pass fresh-song generation: the ABC is planned in a cheap text-only
+# pass and re-planned with a new seed when it fails the sanity gate below;
+# only accepted scores go to the audio render. Details: infiniradio/abc_audit.py
+[abc_audit]
+enabled = true
+max_attempts = 3          # planning passes per job before the job fails
+max_chars = 5000          # reject planned scores longer than this
+min_chars = 300           # reject planned scores shorter than this
 
 [library]
 data_dir = "data"         # database, music files and HLS segments live under here

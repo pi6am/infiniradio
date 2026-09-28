@@ -51,7 +51,17 @@ DEFAULTS: dict[str, Any] = {
             "plan": "33:31",
             "abc": "33:32",
             "audio_save": "10",
+            # SaveText node — the planning pass keeps it and its upstream nodes.
+            "abc_save": "43",
         },
+    },
+    # Two-pass fresh-song generation (see abc_audit.py): plan the ABC,
+    # screen it, retry with a new seed on rejection, then render.
+    "abc_audit": {
+        "enabled": True,
+        "max_attempts": 3,
+        "max_chars": 5000,
+        "min_chars": 300,
     },
     "library": {
         "data_dir": "data",
