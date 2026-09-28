@@ -115,6 +115,13 @@ MIGRATIONS: dict[int, str] = {
     );
     ALTER TABLE tracks ADD COLUMN listener_count INTEGER NOT NULL DEFAULT 0;
     """,
+    5: """
+    -- Restart resume: seconds of program an airing actually occupies.
+    -- NULL means the track's full duration (every normal airing); a resumed
+    -- airing (server restart mid-song) carries only its remainder so the
+    -- now-playing timeline stays frame-accurate.
+    ALTER TABLE play_log ADD COLUMN played_s REAL;
+    """,
 }
 
 

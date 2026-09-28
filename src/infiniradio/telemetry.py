@@ -102,7 +102,7 @@ class Telemetry:
         covers `now` (started_at is already lag-adjusted at write time)."""
         row = self.db.one(
             "SELECT p.track_id AS track_id, p.started_at AS started_at,"
-            " t.duration_s AS duration_s"
+            " COALESCE(p.played_s, t.duration_s) AS duration_s"
             " FROM play_log p JOIN tracks t ON t.id = p.track_id"
             " WHERE p.started_at <= ? AND t.status != 'deleted'"
             " ORDER BY p.started_at DESC, p.id DESC LIMIT 1", (iso(now),))

@@ -11,6 +11,13 @@ dies. The admin-panel playback pause uses the same mechanism: the current
 track is skipped out of the buffer (encoder restart, players resync within
 seconds) and deliberate silence follows until playback is resumed — the
 encoder keeps running the whole time, so listeners stay connected.
+
+A restart resumes the airing it interrupted: the position is predicted from
+the airing's start time and the track duration (downtime-worth of song is
+skipped — imperceptible for quick restarts, and long downtimes exhaust the
+song so playback starts fresh), the remainder is seeked into the playout
+file, and the existing play_log row is updated in place with the remainder's
+length so the now-playing timeline stays frame-accurate.
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ from datetime import timedelta
 from .. import dj, library
 from ..config import Config
 from ..streamer.encoder import Encoder, EncoderDied
-from ..util import iso, utcnow
+from ..util import iso, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +41,9 @@ SILENCE_WARN_EVERY_S = 60.0
 # schedule/now-playing model stays meaningful, large enough for gapless
 # track swaps (the lead only drains at 1x while we open the next decoder).
 MAX_LEAD_S = 90.0
+# A restart resumes the interrupted song only if at least this much of it
+# is left; shorter remainders just move on to a fresh pick.
+RESUME_MIN_REMAINDER_S = 5.0
 
 
 class Feeder:
@@ -45,6 +55,7 @@ class Feeder:
         self.current_track_id: int | None = None
         self.skip_requested = False
         self._silence_since: float | None = None
+        self._pending_resume: tuple[dict, float, int] | None = None
 
     @property
     def active_ids(self) -> set[int]:
@@ -96,15 +107,48 @@ class Feeder:
         self.skip_requested = True
         return True
 
+    def _resume_plan(self) -> tuple[dict, float, int] | None:
+        """(track, offset_s, play_log row id): continue the airing that a
+        restart cut off, if resuming is worthwhile.
+
+        The position is predicted from the airing's start time and the
+        track's duration: the downtime-worth of song is simply skipped,
+        which for a quick restart is imperceptible, and a long downtime
+        exhausts the song on its own (remainder under the threshold) so
+        playback starts fresh instead.
+        """
+        row = self.rt.db.one(
+            "SELECT p.id AS row_id, p.started_at AS started_at, t.*"
+            " FROM play_log p JOIN tracks t ON t.id = p.track_id"
+            " ORDER BY p.id DESC LIMIT 1")
+        if row is None or row["status"] != "ready" or not row["playout_path"]:
+            return None
+        duration = row["duration_s"] or 0.0
+        heard = (utcnow() - parse_iso(row["started_at"])).total_seconds()
+        offset = max(0.0, min(heard, duration))
+        if duration - offset < RESUME_MIN_REMAINDER_S:
+            return None
+        return row, offset, row["row_id"]
+
     # ------------------------------------------------------------------------
 
     async def run(self) -> None:
         await self.encoder.start()
         log.info("feeder running; live playlist at %s", self.encoder.hls_dir / "live.m3u8")
+        self._pending_resume = self._resume_plan()
         while True:
             try:
                 if self.playback_paused:
                     await self._feed_silence(paused=True)
+                    continue
+                if self._pending_resume is not None:
+                    track, offset, row_id = self._pending_resume
+                    self._pending_resume = None
+                    log.info("resuming track %s (%s) at %.1fs after restart",
+                             track["id"], track["title"], offset)
+                    if await self._feed_track(track, resume_offset_s=offset,
+                                              resume_row_id=row_id):
+                        await self._flush_after_skip(track)
                     continue
                 track = self._pop_queue() or dj.pick_next(
                     self.rt.db, self.cfg,
@@ -116,17 +160,7 @@ class Feeder:
                 self._silence_since = None
                 skipped = await self._feed_track(track)
                 if skipped:
-                    # The flushed audio never reached listeners as scheduled;
-                    # drop its play_log entry so now-playing stays truthful.
-                    self.rt.db.execute(
-                        "DELETE FROM play_log WHERE id ="
-                        " (SELECT MAX(id) FROM play_log WHERE track_id = ?)",
-                        (track["id"],),
-                    )
-                    # Flush everything already buffered of the skipped track
-                    # by restarting the encoder (players resync in seconds).
-                    log.info("flushing buffer after skip (encoder restart)")
-                    await self.encoder.restart()
+                    await self._flush_after_skip(track)
             except EncoderDied:
                 await self.encoder.restart()
             except asyncio.CancelledError:
@@ -134,6 +168,19 @@ class Feeder:
             except Exception:
                 log.exception("feeder iteration failed; cooling down")
                 await asyncio.sleep(2)
+
+    async def _flush_after_skip(self, track: dict) -> None:
+        # The flushed audio never reached listeners as scheduled; drop its
+        # play_log entry so now-playing stays truthful, and flush everything
+        # already buffered by restarting the encoder (players resync quickly).
+        self.rt.db.execute(
+            "DELETE FROM play_log WHERE id ="
+            " (SELECT MAX(id) FROM play_log WHERE track_id = ?)",
+            (track["id"],),
+        )
+        log.info("flushing buffer after skip (encoder restart)")
+        await self.encoder.restart()
+
 
     async def _pace(self) -> None:
         """Throttle writes so we stay at most MAX_LEAD_S ahead of realtime."""
@@ -168,18 +215,20 @@ class Feeder:
         await self.encoder.write(chunk)
         await asyncio.sleep(0.2)
 
-    async def _feed_track(self, track: dict) -> None:
+    async def _feed_track(self, track: dict, resume_offset_s: float = 0.0,
+                          resume_row_id: int | None = None) -> bool:
         playout = self.cfg.path("library.data_dir") / "music" / track["playout_path"]
         if not playout.is_file():
             log.error("playout file missing for track %s (%s) — skipping",
                       track["id"], playout)
-            return
+            return False
 
         airtime = iso(utcnow())  # replaced below with queue-aware estimate
         self.current_track_id = track["id"]
+        seek = ["-ss", f"{resume_offset_s:.3f}"] if resume_offset_s > 0 else []
         proc = await asyncio.create_subprocess_exec(
             self.cfg.get("stream.ffmpeg_path", "ffmpeg"),
-            "-hide_banner", "-loglevel", "error",
+            "-hide_banner", "-loglevel", "error", *seek,
             "-i", str(playout),
             "-map", "0:a:0", "-f", "s16le", "-acodec", "pcm_s16le",
             "-ar", str(self.encoder.cfg.get("stream.sample_rate", 48000)),
@@ -202,12 +251,18 @@ class Feeder:
                 # Listeners start hearing this track one listener-lag after
                 # we write its first samples (players trail the live edge).
                 airtime = iso(utcnow() + timedelta(seconds=self._listener_lag()))
+                played_s = None
+                if resume_row_id is not None:
+                    duration = track["duration_s"] or 0.0
+                    played_s = max(0.0, duration - resume_offset_s)
                 library.mark_aired(
                     self.rt.db, track["id"], airtime,
                     prog_offset=self.encoder.program_seconds(),
                     epoch=self.encoder.epoch,
+                    played_s=played_s, resume_row_id=resume_row_id,
                 )
-                log.info("airing track %s (%s) — audible from %s",
+                log.info("%s track %s (%s) — audible from %s",
+                         "resuming" if resume_row_id is not None else "airing",
                          track["id"], track["title"], airtime)
                 first = False
             await self._pace()

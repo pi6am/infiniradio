@@ -130,7 +130,8 @@ def _schedule_rows(db: DB, cfg, listener_id: str, at_ms: float | None,
     rows: list[dict] = []
     if mode == "program":
         rows = db.query(
-            "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset, t.*"
+            "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset,"
+            " p.played_s AS played_s, t.*"
             " FROM play_log p JOIN tracks t ON t.id = p.track_id"
             " WHERE p.epoch = ? AND p.prog_offset IS NOT NULL"
             " AND p.prog_offset <= ? AND t.status != 'deleted'"
@@ -141,7 +142,8 @@ def _schedule_rows(db: DB, cfg, listener_id: str, at_ms: float | None,
             mode = "clock"
     if mode == "clock":
         rows = db.query(
-            "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset, t.*"
+            "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset,"
+            " p.played_s AS played_s, t.*"
             " FROM play_log p JOIN tracks t ON t.id = p.track_id"
             " WHERE p.started_at <= ? AND t.status != 'deleted'"
             " ORDER BY p.started_at DESC LIMIT 11",
@@ -150,15 +152,21 @@ def _schedule_rows(db: DB, cfg, listener_id: str, at_ms: float | None,
     return mode, prog_at, rows
 
 
+def _window_s(r: dict) -> float:
+    """How long an airing occupies on the timeline: its remainder when a
+    restart resumed it mid-song (played_s), else the track's duration."""
+    return r.get("played_s") or r["duration_s"] or 1.0
+
+
 def _pick_current(mode: str, prog_at: float | None, rows: list[dict]) -> dict | None:
     if not rows:
         return None
     r = rows[0]
     if mode == "program":
-        if r["prog_offset"] + (r["duration_s"] or 1.0) > prog_at:
+        if r["prog_offset"] + _window_s(r) > prog_at:
             return r
     else:
-        end = parse_iso(r["airtime"]) + timedelta(seconds=r["duration_s"] or 1.0)
+        end = parse_iso(r["airtime"]) + timedelta(seconds=_window_s(r))
         if end >= utcnow():
             return r
     return None
@@ -198,7 +206,7 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
             start_ms = (encoder.started_wall.replace(tzinfo=timezone.utc).timestamp()
                         + r["prog_offset"]) * 1000.0
             d["start_pdt_ms"] = round(start_ms)
-            d["end_pdt_ms"] = round(start_ms + (r["duration_s"] or 0.0) * 1000.0)
+            d["end_pdt_ms"] = round(start_ms + _window_s(r) * 1000.0)
         else:
             d["start_pdt_ms"] = d["end_pdt_ms"] = None
         return d
