@@ -407,16 +407,23 @@ sudo chmod -R g+rwX /opt/infiniradio
 sudo find /opt/infiniradio -type d -exec chmod g+s {} +
 ```
 
-...and plain `rsync -a --exclude .venv/ --exclude data/ --exclude config.toml`
-as your user works, or skip permissions entirely by staging through /tmp
-with sudo on the receiving side:
+...and plain rsync as your user works (`--no-g` matters: preserving the
+dev machine's group tries to chgrp service-owned files and fails):
 
 ```bash
-rsync -a --exclude .venv/ --exclude data/ --exclude config.toml \
-    ./ you@server:/tmp/infiniradio-stage/
-ssh -t you@server 'sudo rsync -a --delete --exclude .venv/ --exclude data/ \
-    --exclude config.toml /tmp/infiniradio-stage/ /opt/infiniradio/ && \
-    sudo systemctl restart infiniradio'
+rsync -a --no-g --no-o --exclude .venv/ --exclude data/ --exclude config.toml \
+    --exclude __pycache__/ ./ you@server:/opt/infiniradio/
+```
+
+or skip permissions entirely by staging through /tmp with sudo on the
+receiving side:
+
+```bash
+rsync -a --no-g --no-o --exclude .venv/ --exclude data/ --exclude config.toml \
+    --exclude __pycache__/ ./ you@server:/tmp/infiniradio-stage/
+ssh -t you@server 'sudo rsync -a --no-g --delete --exclude .venv/ --exclude data/ \
+    --exclude config.toml --exclude __pycache__/ /tmp/infiniradio-stage/ \
+    /opt/infiniradio/ && sudo systemctl restart infiniradio'
 ```
 
 In both cases exclude the production-only state (`data/`, `config.toml`)
