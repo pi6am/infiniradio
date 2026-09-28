@@ -401,3 +401,25 @@ async def live(request: Request, fname: str):
                                  headers={"Cache-Control": "no-store"})
     # Segments are immutable for as long as they exist in the window.
     return FileResponse(p, headers={"Cache-Control": "public, max-age=180"})
+
+
+# ------------------------------------------------------------------ icons
+
+_STATIC = Path(__file__).resolve().parent / "static"
+
+
+def _root_icon(fname: str, media_type: str) -> FileResponse:
+    # Browsers and legacy iOS request these two from the site root regardless
+    # of any <link> tags; everything else is served under /static/.
+    return FileResponse(_STATIC / fname, media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
+@router.get("/favicon.ico")
+async def favicon_ico():
+    return _root_icon("favicon.ico", "image/x-icon")
+
+
+@router.get("/apple-touch-icon.png")
+async def apple_touch_icon():
+    return _root_icon("apple-touch-icon.png", "image/png")
