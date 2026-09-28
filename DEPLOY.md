@@ -368,6 +368,12 @@ Behavior notes:
 - **Listener counting keeps working**: cloudflared connects from localhost
   and forwards the visitor's IP in `X-Forwarded-For`, which uvicorn trusts
   from `127.0.0.1` by default — the app still sees distinct listener IPs.
+- **What the app already hardens**: security headers on every response,
+  `Secure` cookie flags when the request arrived over HTTPS, login
+  throttling (5 attempts, then a 5-minute lockout per IP), per-listener and
+  per-IP vote rate limits, and a request-body size cap. On top of that:
+  use a strong admin password, and treat the tunnel as the only way in —
+  no port forwards to the origin.
 - **The admin panel goes wherever the app goes.** Use a strong admin
   password; if you want it fenced off, put Cloudflare Access (Zero Trust) in
   front of `radio.example.com/admin`.
@@ -389,6 +395,34 @@ sudo -u infiniradio git pull                     # or re-run the §4 rsync
 sudo -u infiniradio /opt/infiniradio/.venv/bin/pip install -e .
 sudo systemctl restart infiniradio
 ```
+
+**Deploying from a dev machine** — rsyncing as your own ssh user hits the
+§2 ownership: the tree belongs to the service account. Either grant your
+user group write access once (the setgid directories make new files
+inherit it, so this keeps working):
+
+```bash
+sudo usermod -aG infiniradio <you>                # then log out and back in
+sudo chmod -R g+rwX /opt/infiniradio
+sudo find /opt/infiniradio -type d -exec chmod g+s {} +
+```
+
+...and plain `rsync -a --exclude .venv/ --exclude data/ --exclude config.toml`
+as your user works, or skip permissions entirely by staging through /tmp
+with sudo on the receiving side:
+
+```bash
+rsync -a --exclude .venv/ --exclude data/ --exclude config.toml \
+    ./ you@server:/tmp/infiniradio-stage/
+ssh -t you@server 'sudo rsync -a --delete --exclude .venv/ --exclude data/ \
+    --exclude config.toml /tmp/infiniradio-stage/ /opt/infiniradio/ && \
+    sudo systemctl restart infiniradio'
+```
+
+In both cases exclude the production-only state (`data/`, `config.toml`)
+from the sync — and remember a restart is all code updates need (the
+install is editable; rerun `pip install -e .` only when `pyproject.toml`
+changed).
 
 **Backups** — everything that matters is `config.toml` + `data/`. The
 database can be snapshotted consistently while the server runs (needs the

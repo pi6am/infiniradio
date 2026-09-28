@@ -99,6 +99,61 @@ def _check_playout_viable(cfg: Config, backend: str) -> None:
                 "(%d ready track(s)); no new music will be generated", ready)
 
 
+class _HardeningMiddleware:
+    """Security headers + a pre-authentication request-body size cap.
+
+    Headers: a conservative set on every response (nosniff, clickjacking
+    protection, referrer policy); HSTS only when the request itself arrived
+    over HTTPS (behind a TLS-terminating proxy such as cloudflared), so
+    plain-HTTP LAN access is unaffected.
+
+    Body cap: refuse declared bodies over MAX_BODY_BYTES before reading
+    them — /api/vote and the login form are reachable pre-authentication.
+    """
+
+    MAX_BODY_BYTES = 1 << 20  # 1 MiB; vote JSON and login forms are tiny
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_hardened(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                have = {k.lower() for k, _ in headers}
+                extra = [
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"x-frame-options", b"SAMEORIGIN"),
+                    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+                ]
+                if scope.get("scheme") == "https":
+                    extra.append((b"strict-transport-security", b"max-age=31536000"))
+                headers.extend(h for h in extra if h[0] not in have)
+            await send(message)
+
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
+                try:
+                    if int(value) > self.MAX_BODY_BYTES:
+                        await _plain_response(send_hardened, 413, b"payload too large")
+                        return
+                except ValueError:
+                    pass
+
+        await self.app(scope, receive, send_hardened)
+
+
+async def _plain_response(send, status: int, body: bytes) -> None:
+    await send({"type": "http.response.start", "status": status,
+                "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
 def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -> FastAPI:
     cfg = load_config(config_path)
 
@@ -162,6 +217,7 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
 
     app = FastAPI(title="infiniradio", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(_HardeningMiddleware)
     app.state.templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
     app.include_router(public_router)
     app.include_router(admin_router)

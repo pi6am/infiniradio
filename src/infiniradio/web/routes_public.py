@@ -43,7 +43,9 @@ router = APIRouter()
 
 LISTENER_COOKIE = "ir_listener"
 VOTE_WINDOW_S = 60
-VOTE_MAX = 30
+VOTE_MAX = 30          # votes per listener id per window
+IP_VOTE_MAX = 120      # votes per client IP per window — blunts scripted
+                       # ballot stuffing by rotating freshly-minted ids
 
 
 # ------------------------------------------------------------------ helpers
@@ -57,9 +59,13 @@ def ensure_listener(request: Request) -> tuple[str, str | None]:
     return new, new
 
 
-def _set_cookie(response: Response, value: str) -> None:
+def _set_cookie(response: Response, value: str, request: Request) -> None:
+    # Secure only when the request itself arrived over HTTPS (behind a
+    # TLS-terminating proxy such as cloudflared); plain-HTTP LAN access
+    # keeps working.
     response.set_cookie(LISTENER_COOKIE, value, max_age=365 * 24 * 3600,
-                        httponly=True, samesite="lax")
+                        httponly=True, samesite="lax",
+                        secure=request.url.scheme == "https")
 
 
 def _prompt_names(db: DB) -> dict[int, str]:
@@ -231,7 +237,7 @@ async def player(request: Request):
     resp = request.app.state.templates.TemplateResponse(request, "player.html",
                                                         {"request": request})
     if listener[1]:
-        _set_cookie(resp, listener[1])
+        _set_cookie(resp, listener[1], request)
     return resp
 
 
@@ -241,14 +247,18 @@ class _VoteLimiter:
     def __init__(self) -> None:
         self._buckets: dict[str, tuple[float, int]] = {}
 
-    def allow(self, key: str) -> bool:
+    def allow(self, key: str, limit: int = VOTE_MAX) -> bool:
         now = time.monotonic()
         start, count = self._buckets.get(key, (now, 0))
         if now - start > VOTE_WINDOW_S:
             start, count = now, 0
         count += 1
         self._buckets[key] = (start, count)
-        return count <= VOTE_MAX
+        # Bound memory: id-minting attackers grow the bucket dict forever.
+        if len(self._buckets) > 10_000:
+            self._buckets = {k: (s, c) for k, (s, c) in self._buckets.items()
+                             if now - s <= VOTE_WINDOW_S}
+        return count <= limit
 
 
 _limiter = _VoteLimiter()
@@ -260,6 +270,9 @@ def _apply_vote(rt, request: Request, track_id: int, value: int,
         return None
     lid, _ = listener
     if not _limiter.allow(lid):
+        return None
+    ip = request.client.host if request.client else "?"
+    if not _limiter.allow(f"ip:{ip}", limit=IP_VOTE_MAX):
         return None
     row = rt.db.one("SELECT id FROM tracks WHERE id = ? AND status != 'deleted'", (track_id,))
     if not row:
@@ -287,7 +300,7 @@ async def api_vote(request: Request):
         "score": round(wilson_score(row["vote_up"], row["vote_down"]), 3),
     })
     if listener[1]:
-        _set_cookie(resp, listener[1])
+        _set_cookie(resp, listener[1], request)
     return resp
 
 
@@ -301,7 +314,7 @@ async def api_schedule(request: Request, at: str | None = None):
     data = _schedule_payload(rt.db, rt.cfg, listener[0], _parse_at(at), _encoder(rt))
     resp = JSONResponse(data)
     if listener[1]:
-        _set_cookie(resp, listener[1])
+        _set_cookie(resp, listener[1], request)
     return resp
 
 
@@ -322,7 +335,7 @@ async def api_tally(request: Request, track_id: int):
         "my_vote": my["value"] if my else 0, "protected": bool(row["protected"]),
     })
     if listener[1]:
-        _set_cookie(resp, listener[1])
+        _set_cookie(resp, listener[1], request)
     return resp
 
 
@@ -334,7 +347,7 @@ async def api_nowplaying(request: Request, at: str | None = None):
                        encoder=_encoder(rt))
     resp = JSONResponse(data)
     if listener[1]:
-        _set_cookie(resp, listener[1])
+        _set_cookie(resp, listener[1], request)
     return resp
 
 

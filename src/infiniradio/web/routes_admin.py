@@ -94,14 +94,15 @@ async def login_submit(request: Request, username: str = Form(""), password: str
     sessions: Sessions = request.app.state.sessions
     resp = RedirectResponse("/admin", status_code=303)
     resp.set_cookie(SESSION_COOKIE, sessions.issue(), max_age=7 * 24 * 3600,
-                    httponly=True, samesite="lax")
+                    httponly=True, samesite="lax",
+                    secure=request.url.scheme == "https")
     return resp
 
 
 @router.post("/logout")
 async def logout(request: Request):
     resp = RedirectResponse("/admin/login", status_code=303)
-    resp.delete_cookie(SESSION_COOKIE)
+    resp.delete_cookie(SESSION_COOKIE, secure=request.url.scheme == "https")
     return resp
 
 

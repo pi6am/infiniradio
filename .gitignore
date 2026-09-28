@@ -8,3 +8,4 @@ build/
 data/
 config.toml
 .DS_Store
+deploy.sh
