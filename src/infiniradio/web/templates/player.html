@@ -241,6 +241,33 @@
     if (!document.hidden) fetchSchedule();
   });
 
+  // ---- stall watchdog ---------------------------------------------------------
+  // The schedule card recovers on its own, but the audio pipeline can wedge
+  // in ways that produce no usable events: an hls.js session that exhausted
+  // its retries during a server outage, an MSE confused at a generation
+  // seam, a recovery loop that never converges. Watch the element itself:
+  // when it claims to be playing but its clock has been frozen for 45s (and
+  // the user didn't pause it), do a channel-switch rebuild and rejoin the
+  // live edge. User pause (paused === true) and autoplay-blocked states are
+  // left alone.
+  let lastTime = -1;
+  let lastAdvanceAt = Date.now();
+  audioEl.addEventListener('timeupdate', function () {
+    if (Math.abs(audioEl.currentTime - lastTime) > 0.05) {
+      lastTime = audioEl.currentTime;
+      lastAdvanceAt = Date.now();
+    }
+  });
+  setInterval(function () {
+    if (audioEl.paused || rebuilding) return;
+    if (Date.now() - lastAdvanceAt > 45000) {
+      console.warn('audio stalled for 45s while playing — rebuilding stream session');
+      lastAdvanceAt = Date.now();          // give the rebuild room before re-firing
+      if (hlsRef) rebuildStream();
+      else { audioEl.load(); audioEl.play().catch(function () {}); }  // native HLS
+    }
+  }, 10000);
+
   // ---- stream setup -----------------------------------------------------------
   function setupStream() {
     const src = '/live/live.m3u8';
@@ -259,9 +286,24 @@
     hlsRef = hls;
     hls.loadSource(src);
     hls.attachMedia(audioEl);
-    hls.on(Hls.Events.FRAG_CHANGED, function (_e, data) { onFrag(data && data.frag); });
+    let fatalCycles = 0;                    // reset on every healthy fragment
+    hls.on(Hls.Events.FRAG_CHANGED, function (_e, data) {
+      fatalCycles = 0;
+      onFrag(data && data.frag);
+    });
     hls.on(Hls.Events.ERROR, function (_e, data) {
       if (!data.fatal) return;
+      // Gentle in-place recovery first (restart the loader / swap the media
+      // source), but if the session keeps hitting fatal errors — e.g. across
+      // a long server outage that outlasted its retry budget — the instance
+      // may be wedged in a way it cannot recover from itself. Escalate to a
+      // factory-fresh session, which carries none of that state.
+      if (++fatalCycles >= 3) {
+        console.warn('hls.js fatal errors persist — rebuilding stream session');
+        fetchSchedule();
+        rebuildStream();
+        return;
+      }
       setTimeout(function () {
         if (hlsRef !== hls) return;          // a rebuild replaced us already
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();

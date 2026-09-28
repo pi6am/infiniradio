@@ -24,6 +24,11 @@ def cmd_serve(config: str | None, verbose: bool, mockaudio: bool = False) -> int
         port=int(cfg.get("server.port", 8000)),
         log_config=None,
         access_log=False,
+        # Cap the graceful-shutdown wait: reverse proxies (cloudflared) hold
+        # persistent connections, and without a bound uvicorn can sit in
+        # "waiting for connections to close" long enough that a restart
+        # outage outlasts players' retry budgets.
+        timeout_graceful_shutdown=5,
     )
     return 0
 
