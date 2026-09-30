@@ -8,6 +8,7 @@ style_guide = "A dark industrial techno EDM track. Heavy beat and layered harmon
 
 [weighted]
 structure_guide = [
+  { weight = 2, value = "" },
   { weight = 3, value = "Repetitive catchy hook. Short lines with six to eight lines per verse. Repetitive lyrics." },
   { weight = 2, value = "Repetitive catchy hook. Each verse has five lines. The chorus has one strong line repeated three times." },
   { weight = 1, value = "Sparse and mechanical. Verses of two to four short lines, a chant-like chorus, long instrumental stretches." },

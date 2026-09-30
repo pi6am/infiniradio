@@ -10,6 +10,7 @@ style_guide = "A quiet, intimate folk song. Sparse arrangement, unhurried, medit
 
 [weighted]
 structure_guide = [
+  { weight = 2, value = "" },
   { weight = 3, value = "Sparse and imagistic. Verses of four lines with room to breathe, a chorus of two to four lines." },
   { weight = 2, value = "Narrative and unhurried. Verses of six to eight short lines, the chorus repeats with small variations." },
   { weight = 1, value = "Minimal. Two verses and a repeated two-line refrain." },

@@ -13,6 +13,7 @@ style_guide = "A fast-paced and energetic J-pop-style intro to an anime. It shou
 
 [weighted]
 structure_guide = [
+  { weight = 2, value = "" },
   { weight = 3, value = "Repetitive catchy hook. Each verse has four lines. The chorus has two lines repeated twice each." },
   { weight = 2, value = "Repetitive catchy hook. Short lines with six to eight lines per verse. Repetitive lyrics." },
   { weight = 1, value = "Fast paced and punchy. Each verse has five lines with a complementary chorus that progresses each time it repeats." },
