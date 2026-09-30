@@ -81,13 +81,17 @@ python -m infiniradio                 # serve on http://127.0.0.1:8000
 ```bash
 python -m infiniradio --mockaudio          # sine-tone audio
 python -m infiniradio --mockaudio --mockllm   # + scripted LLM: full lyrics pipeline
+python tests/run.py                        # in-process regression suites
 ```
 
 The mock generator is synthesizes placeholder tone "songs" so you can
 exercise the whole pipeline (DJ, votes, eviction, admin) before pointing it
 at a real GPU. The mock LLM scripts the reference workflows' stages —
 including their gates — so commissioning, the two-phase job flow, stage
-logging and tagging all run end to end with no endpoint at all.
+logging and tagging all run end to end with no endpoint at all. The test
+suites cover the workflow engine (retries, resume, parsing, truncation
+continuation), the job pipeline, styles, the deletion buffer, the LLM
+health ping, and app startup validation — all against temp data dirs.
 
 ## LLM lyrics workflows (optional)
 

@@ -1,0 +1,126 @@
+"""Two-phase job flow on a temp DB: lyrics workflow commissioning, stage
+logging, render hand-off, ingest with tags/lineage, crash reconciliation,
+and failure->retry resume (the expensive-LLM-stages-never-rerun guarantee).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import shutil
+
+import _helpers
+
+_helpers.ensure_repo()
+
+from infiniradio import dj, library
+from infiniradio.db import DB
+from infiniradio.generator.base import GenRequest
+from infiniradio.generator.mock import MockGenerator
+from infiniradio.llm.mock import MockLLMClient
+from infiniradio.lyrics import load_workflows
+
+from _helpers import RT, isolated_config
+
+
+async def _main(cfg, rt) -> None:
+    db = rt.db
+    library.import_prompts(db, cfg)
+    library.seed_tags(db, cfg)
+
+    # tag vocabulary: only llm_tags are offered to workflows
+    vocabs = library.tag_vocabulary(db)
+    assert {"pop", "rock", "blues", "metal", "rap", "male vocal"} <= set(vocabs), vocabs
+    assert "vocal" not in vocabs and "english" not in vocabs  # forced, never offered
+    print(f"tag vocabulary: {len(vocabs)} LLM-pickable (forced tags excluded)")
+
+    # commission a lyrics workflow job
+    job_id = dj.enqueue_job(db, workflow_id="jp-title-first")
+    job = db.one("SELECT * FROM generation_jobs WHERE id = ?", (job_id,))
+    assert job["phase"] == "lyrics" and job["status"] == "queued"
+    theme = json.loads(job["progress"])["theme_title"]
+    assert theme
+    print(f"job {job_id} queued (phase=lyrics, theme={theme!r})")
+
+    # run the lyrics phase exactly as the runner does
+    await dj._run_lyrics_phase(rt, job)
+    job = db.one("SELECT * FROM generation_jobs WHERE id = ?", (job_id,))
+    assert job["status"] == "queued" and job["phase"] == "render", \
+        (job["status"], job["phase"])
+    outputs = json.loads(job["progress"])["outputs"]
+    assert outputs["title"] == "A Window Far Away" and outputs["lyrics"]
+    stage_rows = db.query("SELECT * FROM job_stage_log WHERE job_id = ? ORDER BY id",
+                          (job_id,))
+    assert len(stage_rows) == 7 and all(r["response_text"] for r in stage_rows)
+    print(f"lyrics phase done: 7 stages logged, title={outputs['title']!r}")
+
+    # build the render request from the job row (the render runner path)
+    req = dj.build_request(db, job)
+    assert "dream pop" in req.style and "[Chorus]" in req.lyrics and req.abc is None
+
+    # render phase body: create_track -> mock generate -> ingest
+    track_id = library.create_track(
+        db, cfg, prompt_id=None, parent_track_id=None, workflow_id=job["workflow_id"],
+        style_id=job["style_id"], title=outputs["title"],
+        theme_title=outputs["theme_title"], style_text=req.style,
+        lyrics_snapshot=req.lyrics, seed=req.seed, cot_mode="full")
+    result = await rt.generator.generate(req, library.track_dir(cfg, track_id))
+    await library.ingest(db, cfg, track_id, result, tags=outputs["tags"])
+    track = db.one("SELECT * FROM tracks WHERE id = ?", (track_id,))
+    assert track["status"] == "ready" and track["title"] == "A Window Far Away"
+    assert track["theme_title"] == theme and track["workflow_id"] == "jp-title-first"
+    tag_names = library.track_tags(db, track_id)
+    assert {"vocal", "english", "rock", "pop", "male vocal"} <= set(tag_names)
+    print(f"track {track_id} ingested with tags {sorted(tag_names)}")
+
+    # stats feed the commission bandit; reconcile fails running jobs
+    assert dj.workflow_air_stats(db, "jp-title-first")["aired"] == 0
+    assert dj.pick_generator(rt) is not None
+    db.execute("UPDATE generation_jobs SET status = 'running' WHERE id = ?", (job_id,))
+    dj.reconcile_stale_jobs(db)
+    assert db.one("SELECT status FROM generation_jobs WHERE id = ?",
+                  (job_id,))["status"] == "failed"
+
+    # legacy prompt jobs go straight to render
+    pid = db.one("SELECT id FROM prompts LIMIT 1")["id"]
+    jid2 = dj.enqueue_job(db, prompt_id=pid)
+    j2 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid2,))
+    assert j2["phase"] == "render" and j2["workflow_id"] is None
+    print("prompt job enqueues straight to render (legacy behavior)")
+
+    # failure persists completed stages; retry resumes, not restarts
+    jid3 = dj.enqueue_job(db, workflow_id="jp-title-first")
+    failing = RT(cfg, db, rt.generator, MockLLMClient(fail_first={"tags": 2}), rt.workflows)
+    await dj._run_lyrics_phase(
+        failing, db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid3,)))
+    job3 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid3,))
+    assert job3["status"] == "failed" and "tags" in (job3["error"] or "")
+    mid = json.loads(job3["progress"])
+    assert len(mid["completed"]) == 6 and mid["theme_title"]
+    assert mid["vars"].get("song_name") == "A Window Far Away"
+    print("failed run persisted 6/7 completed stages mid-run")
+    db.execute("UPDATE generation_jobs SET status = 'queued', error = NULL,"
+               " finished_at = NULL WHERE id = ? AND status = 'failed'", (jid3,))
+    fresh = MockLLMClient()
+    rt2 = RT(cfg, db, rt.generator, fresh, rt.workflows)
+    await dj._run_lyrics_phase(
+        rt2, db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid3,)))
+    job3 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid3,))
+    assert job3["status"] == "queued" and job3["phase"] == "render"
+    assert fresh.calls == 1, fresh.calls  # only the tags stage ran
+    print("retry resumed at the tags stage only (1 LLM call)")
+
+
+def run() -> None:
+    cfg, tmp = isolated_config()
+    try:
+        db = DB(tmp / "infiniradio.db")
+        rt = RT(cfg, db, MockGenerator(cfg), MockLLMClient(), load_workflows(cfg))
+        asyncio.run(_main(cfg, rt))
+        print("test_jobs: ALL PASSED")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    run()
