@@ -370,7 +370,11 @@ def _fail_job(db: DB, job_id: int, error: str) -> None:
 
 
 def _log_stage_attempt(db: DB, job_id: int, trace: AttemptTrace) -> None:
-    """Persist one LLM exchange in job_stage_log (append-only diagnostics)."""
+    """Persist one LLM exchange in job_stage_log (append-only diagnostics).
+    Continuation rounds (truncation recovery) are folded into usage_json."""
+    usage = dict(trace.usage)
+    if trace.continuations:
+        usage["continuations"] = trace.continuations
     db.execute(
         "INSERT INTO job_stage_log (job_id, stage_id, attempt, prompt_text, response_text,"
         " vars_json, gate_json, model, usage_json, duration_s, created_at)"
@@ -379,7 +383,7 @@ def _log_stage_attempt(db: DB, job_id: int, trace: AttemptTrace) -> None:
          json.dumps(trace.vars_snapshot, ensure_ascii=False),
          json.dumps([{"code": f.code, "check": f.check, "detail": f.detail}
                      for f in trace.failures]),
-         trace.model, json.dumps(trace.usage), round(trace.duration_s, 3), iso(utcnow())),
+         trace.model, json.dumps(usage), round(trace.duration_s, 3), iso(utcnow())),
     )
 
 
@@ -446,7 +450,8 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
             tag_vocabulary=library.tag_vocabulary(db),
             progress=progress, guard=guard,
             on_attempt=lambda tr: _log_stage_attempt(db, job["id"], tr),
-            on_stage=on_stage)
+            on_stage=on_stage,
+            max_continuations=int(rt.cfg.get("llm.max_continuations", 2)))
         if not result.ok:
             _fail_job(db, job["id"], result.error)
             return

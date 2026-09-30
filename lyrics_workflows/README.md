@@ -100,6 +100,14 @@ verbatim in the job's stage log.
 Each stage runs: render prompt → LLM call → **all gate checks and
 extractions evaluated together** → pass means variables are saved, fail
 means every problem is reported at once and the retry composes one fix.
+A reply cut off by the output budget (`finish_reason = length` — e.g. the
+model thinking past its entire token budget) is **continued** first: the
+partial is resubmitted as an assistant turn and the model resumes
+mid-stream, up to `llm.max_continuations` times. Continuations are
+transport, not content retries — they never consume `max_attempts`; a
+reply still truncated after the bound fails the attempt with code
+`truncated` (never parsed into a song: a partial is often a leaked
+work-in-progress draft, not the answer).
 Extraction keys accept an ordered list of alternative patterns (first
 match wins) — e.g. a `Name:` line in backticks, quotes, or bare — so
 output-style variation parses locally instead of costing LLM round-trips.
@@ -122,7 +130,7 @@ Feedback templates additionally see `failures` (list of
 `{code, check, detail}`), the predicates `failed("too_long")` and
 `extract_failed("song_name")`, `attempt`, and `previous` (the rejected
 reply). Failure codes: `too_long too_short missing_pattern missing_any
-forbidden_present extract_failed llm_error`.
+forbidden_present extract_failed llm_error truncated`.
 
 Reserved names (unavailable as save/extract variables): `title`, `params`,
 `tags`, `failures`, `failed`, `extract_failed`, `attempt`, `previous`.
@@ -197,7 +205,14 @@ Conventions (enforced by taste, not code — any variable name works):
 - `structure_guide`: the STRUCTURE of the lyrics — lines per section,
   chorus repetition, line lengths. The main artificial-variation lever.
 - `rhyme_guide`: rhyme discipline; styles that favor repetition weight
-  stricter patterns higher (the semi-coupling).
+  stricter patterns higher (the semi-coupling). Beware: prescriptive rhyme
+  patterns make thinking-heavy models think even harder — watch the
+  `truncated` failure code and the continuation counts in the stage log.
+
+Editing idiom: an entry with `weight = 0` (or an empty `value`) is
+disabled but kept — the equivalent of a commented-out alternative, easy
+to re-enable. A key whose entries are all disabled resolves to nothing
+and the workflow's `[vars]` default applies.
 
 A workflow opts in with `styled = true` and declares fallbacks under
 `[vars]`; templates read the variables at top level

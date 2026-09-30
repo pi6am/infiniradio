@@ -57,7 +57,15 @@ log = logging.getLogger(__name__)
 # these; the set is closed so startup validation can catch template typos
 # is unnecessary — but codes appearing in traces stay stable for queries.
 FAILURE_CODES = ("too_long", "too_short", "missing_pattern", "missing_any",
-                 "forbidden_present", "extract_failed", "llm_error")
+                 "forbidden_present", "extract_failed", "llm_error",
+                 "truncated")
+
+# Sent when a reply arrives truncated (finish_reason = length): the partial
+# assistant turn stays in the history so the model resumes mid-stream.
+CONTINUE_PROMPT = (
+    "You ran out of output space mid-reply. Continue exactly where the "
+    "previous reply stopped — do not repeat any part of it, do not restart, "
+    "just finish the reply.")
 
 # Names the engine itself puts into the template context; workflows cannot
 # save or extract variables under these (their value would be clobbered).
@@ -155,7 +163,13 @@ class WorkflowSpec:
 
 @dataclass
 class AttemptTrace:
-    """One LLM call: everything needed to debug or replay it."""
+    """One LLM exchange: everything needed to debug or replay it.
+
+    continuations counts truncation continuations (the exchange may span
+    several calls when the model exhausts its output budget mid-thinking;
+    those are transport, not content retries, and do not consume the
+    stage's attempts).
+    """
 
     stage_id: str
     attempt: int
@@ -167,6 +181,7 @@ class AttemptTrace:
     usage: dict[str, int] = field(default_factory=dict)
     duration_s: float = 0.0
     vars_snapshot: dict[str, str] = field(default_factory=dict)
+    continuations: int = 0
 
     @property
     def failure_text(self) -> str:
@@ -447,18 +462,53 @@ def _strip_title_section(text: str) -> str:
     return (text[:m.start()] + text[m.end():]).strip("\n")
 
 
+# Lines between two section headers that look like analysis prose rather
+# than lyrics: lyric lines are short; post-"thinking" deliberation about
+# stanzas and rhyme schemes is long and wordy. Conservative thresholds so
+# long-lined lyrics never trip it by accident.
+_PROSE_LONG_LINE = 90
+_PROSE_MAX_LYRIC_LINES = 20
+
+
+def _prose_gap(gap: str) -> bool:
+    body = [ln.strip() for ln in gap.splitlines() if ln.strip()][1:]  # drop the header line
+    if not body:
+        return False
+    long_lines = sum(1 for ln in body if len(ln) > _PROSE_LONG_LINE)
+    return long_lines >= 2 or len(body) > _PROSE_MAX_LYRIC_LINES
+
+
+def _last_song_run_start(text: str) -> int | None:
+    """Start of the last contiguous header/lyrics run in the text.
+
+    A completed reply whose thinking leaked may contain a work-in-progress
+    draft, deliberation about it, and THEN the final song; the final answer
+    is always the last run, so runs split wherever the text between two
+    consecutive headers turns prose-like.
+    """
+    starts: list[int] = []
+    prev: int | None = None
+    for m in re.finditer(_GENERIC_SECTION_RE, text):
+        if prev is None or _prose_gap(text[prev:m.start()]):
+            starts.append(m.start())
+        prev = m.start()
+    return starts[-1] if starts else None
+
+
 def extract_song_block(text: str, section_patterns: tuple[str, ...] = ()) -> str:
     """The song inside an LLM reply, robust to output-style variation.
 
     Quantized models post-"thinking" wrap the song in commentary, code
-    fences, both, or neither. Rules, in order:
+    fences, both, or neither — and may leak draft songs inside their
+    deliberation. Rules, in order:
 
     1. the first fenced block whose content contains a section header
        (patterns default to the generic [Header]-on-its-own-line shape)
        is the song;
     2. otherwise the reply is treated as a bare song: a [Title] section is
-       stripped and, when section headers are present, everything before
-       the first one (leading commentary prose) is dropped;
+       stripped and the LAST contiguous header/lyrics run is the song
+       (leading commentary prose and any leaked draft songs before it are
+       dropped);
     3. fenced content also gets a leading [Title] section stripped.
 
     Parsing beats retrying here: one local pass, no extra LLM round-trip,
@@ -469,11 +519,9 @@ def extract_song_block(text: str, section_patterns: tuple[str, ...] = ()) -> str
         content = m.group(1)
         if any(re.search(p, content, re.DOTALL) for p in patterns):
             return _strip_title_section(content).strip()
-    bare = _strip_title_section(text)
-    header = re.search(_GENERIC_SECTION_RE, bare)
-    if header:
-        bare = bare[header.start():]
-    return bare.strip()
+    start = _last_song_run_start(text)
+    bare = text[start:] if start is not None else text
+    return _strip_title_section(bare).strip()
 
 
 def _section_patterns(stage: StageSpec) -> tuple[str, ...]:
@@ -573,6 +621,7 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
                        guard: Callable[[], bool] | None = None,
                        on_attempt: Callable[[AttemptTrace], None] | None = None,
                        on_stage: Callable[[str, dict[str, Any]], None] | None = None,
+                       max_continuations: int = 2,
                        stop_after: str | None = None,
                        ) -> WorkflowResult:
     """Execute a workflow spec against an LLM client.
@@ -582,11 +631,19 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
     never re-pays for completed stages. ``guard`` is checked between stages
     and attempts (the job runner uses it to notice cancellation);
     WorkflowCancelled is raised when it turns false. ``on_attempt`` fires
-    after every LLM call so traces can be persisted as they happen, and
+    after every LLM exchange so traces can be persisted as they happen, and
     ``on_stage`` fires with (stage_id, progress snapshot) after every stage
     COMPLETES — persisting that snapshot is what makes live progress
-    visible and failure-resume cheap. ``stop_after`` ends the run
-    successfully once that stage completes (audition/debugging aid).
+    visible and failure-resume cheap.
+
+    ``max_continuations`` bounds truncation continuations: a reply cut off
+    by the output budget (finish_reason = length — typically the model
+    thinking past its entire token budget) is continued by resubmitting
+    the partial as an assistant turn; continuations are transport, not
+    content retries, and never consume the stage's attempts. A reply still
+    truncated after the bound fails the attempt with code "truncated".
+    ``stop_after`` ends the run successfully once that stage completes
+    (audition/debugging aid).
     """
     progress = progress or {}
     completed: list[str] = list(progress.get("completed") or [])
@@ -674,14 +731,33 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
                 )
 
             msg = Message("user", prompt)
+            conv: list[Message] = thread + [msg]
+            parts: list[str] = []
+            usage: dict[str, int] = {}
+            model_name = ""
+            continuations = 0
+            ended_truncated = False
             t0 = time.monotonic()
             try:
-                reply = await client.chat(
-                    thread + [msg], model=stage.model, temperature=stage.temperature)
+                for rnd in range(max(0, max_continuations) + 1):
+                    reply = await client.chat(
+                        conv, model=stage.model, temperature=stage.temperature)
+                    parts.append(reply.content)
+                    _usage_add(usage, reply.usage)
+                    model_name = reply.model or model_name
+                    ended_truncated = reply.truncated
+                    if not reply.truncated:
+                        break
+                    if rnd == max_continuations:
+                        break
+                    continuations += 1
+                    conv = conv + [Message("assistant", reply.content),
+                                   Message("user", CONTINUE_PROMPT)]
             except LLMError as exc:
                 # The client already exhausted transport retries; re-sending
                 # later (endpoint may recover) costs one stage attempt. The
-                # conversation is untouched — the model never saw the request.
+                # conversation is untouched — the model never saw a complete
+                # exchange we could build on.
                 trace = AttemptTrace(stage.id, attempt, prompt, "",
                                      [Failure("llm_error", "llm", str(exc))])
                 result.attempts.append(trace)
@@ -694,34 +770,45 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
                             spec.name, stage.id, attempt, exc)
                 continue
 
-            block_text = extract_song_block(reply.content, _section_patterns(stage)) \
+            full_text = "".join(parts)
+            block_text = extract_song_block(full_text, _section_patterns(stage)) \
                 if stage.block else ""
             failures, extracted = _evaluate(
-                stage, reply.content, block_text if stage.block else reply.content)
+                stage, full_text, block_text if stage.block else full_text)
+            if ended_truncated:
+                # Still cut off after every continuation: never treat a
+                # partial (often a thinking-leak work-in-progress draft) as
+                # a complete reply; the retry's feedback nudges conciseness.
+                failures.insert(0, Failure(
+                    "truncated", "length",
+                    f"reply still cut off after {continuations} continuation(s)"))
             ok = not failures
             vars_snapshot = dict(extracted)
             if ok and stage.block:
                 vars_snapshot[stage.block] = block_text
             if ok and stage.saves:
-                vars_snapshot[stage.saves] = reply.content.strip()
-            trace = AttemptTrace(stage.id, attempt, prompt, reply.content,
-                                 failures, ok, reply.model, reply.usage,
-                                 time.monotonic() - t0, vars_snapshot)
+                vars_snapshot[stage.saves] = full_text.strip()
+            trace = AttemptTrace(stage.id, attempt, prompt, full_text,
+                                 failures, ok, model_name, usage,
+                                 time.monotonic() - t0, vars_snapshot,
+                                 continuations)
             result.attempts.append(trace)
             if on_attempt:
                 on_attempt(trace)
-            _usage_add(usage_total, reply.usage)
+            _usage_add(usage_total, usage)
 
             # The exchange happened; failed attempts stay in the history the
-            # feedback turn continues from.
-            thread.append(msg)
-            thread.append(Message("assistant", reply.content))
+            # feedback turn continues from — continuation turns included, so
+            # later "continue"-thread stages see the conversation the model
+            # actually experienced.
+            thread.extend(conv[len(thread):])
+            thread.append(Message("assistant", parts[-1]))
 
             if ok:
                 if stage.block:
                     vars_[stage.block] = block_text
                 if stage.saves:
-                    vars_[stage.saves] = reply.content.strip()
+                    vars_[stage.saves] = full_text.strip()
                 vars_.update(extracted)
                 sr.ok = True
                 sr.attempts = attempt
@@ -732,14 +819,15 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
                     # retry resume here instead of starting over.
                     on_stage(stage.id, _progress_snapshot(
                         completed, vars_, threads, current_thread))
-                log.info("workflow %s: stage %s ok (attempt %d, %.1fs, %d tokens)",
-                         spec.name, stage.id, attempt, trace.duration_s,
-                         reply.usage.get("completion_tokens", 0))
+                log.info("workflow %s: stage %s ok (attempt %d%s, %.1fs, %d tokens)",
+                         spec.name, stage.id, attempt,
+                         f", +{continuations} continuation(s)" if continuations else "",
+                         trace.duration_s, usage.get("completion_tokens", 0))
                 break
             sr.attempts = attempt
             sr.failures = failures
             prev_failures = failures
-            prev_reply = reply.content
+            prev_reply = full_text
             log.info("workflow %s: stage %s attempt %d rejected: %s",
                      spec.name, stage.id, attempt, trace.failure_text)
         else:
@@ -881,9 +969,10 @@ def main() -> None:
             """Stream each LLM exchange as it completes (long pipelines
             shouldn't be silent until the end)."""
             status = "ok" if trace.ok else "REJECTED: " + trace.failure_text
+            cont = f", +{trace.continuations} cont." if trace.continuations else ""
             print(f"\n=== stage {trace.stage_id} attempt {trace.attempt} "
-                  f"({trace.duration_s:.1f}s, {trace.usage.get('completion_tokens', '?')} tok) "
-                  f"— {status}", flush=True)
+                  f"({trace.duration_s:.1f}s, {trace.usage.get('completion_tokens', '?')} tok"
+                  f"{cont}) — {status}", flush=True)
             if trace.response_text:
                 _print_trunc("prompt", trace.prompt_text, limit)
                 _print_trunc("reply", trace.response_text, limit)
@@ -896,6 +985,7 @@ def main() -> None:
             result = await run_workflow(
                 client, spec, initial_vars=initial,
                 tag_vocabulary=llm_tags or ["pop", "rock", "male vocal", "female vocal"],
+                max_continuations=int(cfg.get("llm.max_continuations", 2)),
                 stop_after=args.stage, on_attempt=show)
         finally:
             await client.close()

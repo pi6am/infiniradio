@@ -124,9 +124,15 @@ class MockLLMClient(LLMClient):
     name = "mock"
 
     def __init__(self, fail_first: dict[str, int] | None = None,
-                 bad_first: dict[str, int] | None = None):
+                 bad_first: dict[str, int] | None = None,
+                 truncate_first: dict[str, int] | None = None):
         self.fail_first = {k.lower(): n for k, n in (fail_first or {}).items()}
         self.bad_first = {k.lower(): n for k, n in (bad_first or {}).items()}
+        # Stage keyword -> number of initial replies to return TRUNCATED
+        # (a prefix of the canned text, finish_reason=length). The
+        # continuation turn that follows resolves via the sticky keyword to
+        # the full canned reply — exercising the engine's continuation path.
+        self.truncate_first = {k.lower(): n for k, n in (truncate_first or {}).items()}
         self.calls = 0
         self._sticky: str | None = None  # last matched stage keyword
 
@@ -161,6 +167,11 @@ class MockLLMClient(LLMClient):
             return Reply(content="(mock garbage that fails gates)",
                          model=model or "mock",
                          usage={"prompt_tokens": 10, "completion_tokens": 6})
+        if key is not None and self.truncate_first.get(key.lower(), 0) > 0:
+            self.truncate_first[key.lower()] -= 1
+            content = next((reply for needle, reply in SCRIPT if needle == key), FALLBACK)
+            return Reply(content=content[:60], truncated=True, model=model or "mock",
+                         usage={"prompt_tokens": 10, "completion_tokens": 60})
         content = next((reply for needle, reply in SCRIPT if needle == key), FALLBACK)
         return Reply(content=content, model=model or "mock",
                      usage={"prompt_tokens": len(messages[-1].content) // 4,

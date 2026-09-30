@@ -98,10 +98,15 @@ class OpenAICompatClient(LLMClient):
         if not choices or not isinstance(choices[0], dict):
             raise LLMError(f"malformed completion reply: {str(data)[:400]}")
         content = (choices[0].get("message") or {}).get("content")
-        if not isinstance(content, str) or not content.strip():
+        truncated = str(choices[0].get("finish_reason") or "") == "length"
+        # An empty reply is normally fatal; an empty TRUNCATED one may just
+        # mean the whole budget went to thinking — the engine's continuation
+        # can still recover it.
+        if not isinstance(content, str) or (not content.strip() and not truncated):
             raise LLMError(f"empty completion content: {str(data)[:400]}")
         usage = data.get("usage") or {}
         return Reply(content=content, model=str(data.get("model", "")),
+                     truncated=truncated,
                      usage={k: int(v) for k, v in usage.items() if isinstance(v, (int, float))})
 
     async def status(self) -> dict[str, Any]:

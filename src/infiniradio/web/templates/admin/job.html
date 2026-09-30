@@ -44,6 +44,7 @@
     <summary>
       <b>{{ s.stage_id }}</b> · attempt {{ s.attempt }} · {{ "%.1f"|format(s.duration_s) }}s
       {% if s.model %}· {{ s.model }}{% endif %}
+      {% if s.usage.continuations %}· +{{ s.usage.continuations }} continuation(s){% endif %}
       {% if s.usage.completion_tokens %}· {{ s.usage.completion_tokens }} out / {{ s.usage.prompt_tokens }} in tokens{% endif %}
       {% if s.gate %}<span class="pill err">rejected</span>{% else %}<span class="pill ok">ok</span>{% endif %}
     </summary>

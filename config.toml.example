@@ -70,6 +70,10 @@ max_output_tokens = 8192
 timeout_s = 900.0
 transport_retries = 3     # 429/5xx/timeout retries with backoff; content
                           # quality retries belong to the workflow stages
+max_continuations = 2     # when a reply is cut off by the output budget
+                          # (finish_reason = length), continue it by
+                          # resubmitting the partial — at most this many
+                          # times; 0 disables
 
 [lyrics]
 # One directory per workflow: workflow.toml (control flow) + Jinja templates

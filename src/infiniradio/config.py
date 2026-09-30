@@ -109,6 +109,12 @@ DEFAULTS: dict[str, Any] = {
         # Transport-level retries (429/5xx/timeouts) with backoff; content
         # quality retries belong to the workflow stages, not the client.
         "transport_retries": 3,
+        # When a reply is cut off by the output budget (finish_reason =
+        # length — e.g. the model thinking past its entire token budget),
+        # resubmit the partial as an assistant turn and ask it to continue,
+        # at most this many times. Continuations are transport, not content
+        # retries: they never consume a stage's attempts. 0 disables.
+        "max_continuations": 2,
     },
     "lyrics": {
         # One directory per workflow: workflow.toml + Jinja templates.

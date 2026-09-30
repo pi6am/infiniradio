@@ -88,10 +88,11 @@ def _parse_vars_weighted(data: dict, where: str) -> tuple[dict[str, str],
                 raise StyleError(f"{where}: weighted.{key} entries must be "
                                  '{{ weight = N, value = "..." }} inline tables')
             weight, value = entry["weight"], entry["value"]
-            if not isinstance(weight, (int, float)) or weight <= 0:
-                raise StyleError(f"{where}: weighted.{key}: weight must be > 0, got {weight!r}")
-            if not isinstance(value, str) or not value.strip():
-                raise StyleError(f"{where}: weighted.{key}: value must be a non-empty string")
+            if not isinstance(weight, (int, float)) or weight < 0:
+                raise StyleError(f"{where}: weighted.{key}: weight must be >= 0 "
+                                 f"(0 disables the entry), got {weight!r}")
+            if not isinstance(value, str):
+                raise StyleError(f"{where}: weighted.{key}: value must be a string")
             parsed.append((float(weight), value))
         weighted[str(key)] = tuple(parsed)
     return vars_, weighted
@@ -164,13 +165,20 @@ def resolve(vars_: dict[str, Any], weighted: dict[str, Any], seed: int) -> dict[
     """Fixed vars + one weighted choice per key, drawn from a seeded RNG.
 
     Deterministic for a given (definition, seed) — the job's seed makes
-    every commission reproducible from the job row alone.
+    every commission reproducible from the job row alone. Entries with
+    weight 0 or an empty value are disabled (the editing idiom for keeping
+    an option around without selecting it); a key whose entries are all
+    disabled resolves to nothing and the workflow's default applies.
     """
     rng = random.Random(seed)
     out = {str(k): str(v) for k, v in vars_.items()}
     for key, entries in weighted.items():
-        weights = [float(w) for w, _v in entries]
-        values = [str(v) for _w, v in entries]
+        active = [(float(w), str(v)) for w, v in entries
+                  if float(w) > 0 and str(v).strip()]
+        if not active:
+            continue
+        weights = [w for w, _v in active]
+        values = [v for _w, v in active]
         out[str(key)] = rng.choices(values, weights=weights, k=1)[0]
     return out
 

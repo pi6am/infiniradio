@@ -33,6 +33,9 @@ class Reply:
     content: str
     model: str = ""
     usage: dict[str, int] = field(default_factory=dict)  # prompt/completion/total tokens
+    truncated: bool = False        # finish_reason == "length": the reply was cut
+                                   # off mid-stream by the output budget; the
+                                   # caller (workflow engine) may continue it
 
 
 class LLMError(Exception):
