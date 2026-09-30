@@ -47,6 +47,10 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
 - **Disk quota without waste** — when over quota, generation *pauses*. Unplayed audio is
   never auto-deleted; eviction only touches played tracks (most-downvoted first).
   ABC text always survives.
+- **Deletion buffer** — condemned tracks keep their audio for a configurable grace
+  period (never aired, still counting toward quota) before real deletion, so a
+  coordinated downvote wave can't destroy a good song before an admin reviews and
+  undeletes it. Plus an admin "hold from airing" switch for any track.
 - **Admin panel** — dashboard, library browser (listen/view ABC/lineage), prompt CRUD,
   job control, runtime settings, plus pause switches for generation and playback
   (paused playback airs silence so the stream stays live). Single admin account,

@@ -132,6 +132,8 @@ async def dashboard(request: Request):
         " COALESCE(SUM(status = 'generating'), 0) AS generating,"
         " COALESCE(SUM(status = 'failed'), 0) AS failed,"
         " COALESCE(SUM(status = 'deleted'), 0) AS deleted,"
+        " COALESCE(SUM(status = 'trashed'), 0) AS trashed,"
+        " COALESCE(SUM(hold = 1 AND status = 'ready'), 0) AS held,"
         " COALESCE(SUM(protected = 1 AND status = 'ready'), 0) AS protected,"
         " COALESCE(SUM(CASE WHEN status = 'ready' THEN duration_s ELSE 0 END), 0.0)"
         " AS playtime_s FROM tracks"
@@ -488,8 +490,47 @@ async def track_delete(request: Request, track_id: int, csrf: str = Form("")):
             if track_id not in feeder.active_ids:
                 break
             await asyncio.sleep(0.1)
-    library.delete_track(rt.db, rt.cfg, track_id)
+    # Through the deletion buffer: with library.deletion_buffer_hours > 0 the
+    # track becomes trashed (audio kept for review, restorable) instead of
+    # vanishing immediately.
+    library.schedule_delete(rt.db, rt.cfg, track_id)
     return RedirectResponse(_back(request, "/admin/library"), status_code=303)
+
+
+@router.post("/track/{track_id}/undelete")
+async def track_undelete(request: Request, track_id: int, csrf: str = Form("")):
+    """Admin rescue while a condemned track is still in the trash."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    library.undelete_track(rt.db, track_id)
+    return RedirectResponse(_back(request, "/admin/library?status=trashed"), status_code=303)
+
+
+@router.post("/track/{track_id}/delete_now")
+async def track_delete_now(request: Request, track_id: int, csrf: str = Form("")):
+    """Skip the buffer: empty the trash for this track immediately."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    library.delete_track(rt.db, rt.cfg, track_id)
+    return RedirectResponse(_back(request, "/admin/library?status=trashed"), status_code=303)
+
+
+@router.post("/track/{track_id}/hold")
+async def track_hold(request: Request, track_id: int, csrf: str = Form("")):
+    """Toggle 'never auto-air this track' — the DJ's variation and selection
+    picks skip held tracks; an admin's explicit queueing (air next, restart
+    resume of an in-flight airing) is deliberate and still works. Use the
+    queue's own remove button to cancel a queued item."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    row = rt.db.one("SELECT hold FROM tracks WHERE id = ?", (track_id,))
+    if row:
+        rt.db.execute("UPDATE tracks SET hold = ? WHERE id = ?",
+                      (0 if row["hold"] else 1, track_id))
+    return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
 
 
 @router.post("/track/{track_id}/rename")

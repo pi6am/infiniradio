@@ -14,6 +14,7 @@ import logging
 import re
 import shutil
 import tomllib
+from datetime import timedelta
 from pathlib import Path
 
 from . import naming
@@ -174,6 +175,65 @@ def delete_track(db: DB, cfg: Config, track_id: int) -> bool:
     )
     log.info("deleted track %s (%s)", track_id, row["title"])
     return True
+
+
+# ------------------------------------------------------------- deletion buffer
+
+def schedule_delete(db: DB, cfg: Config, track_id: int) -> bool:
+    """Condemn a track. With library.deletion_buffer_hours > 0 the track
+    moves to status 'trashed' — audio kept (still counting toward quota,
+    never aired) until delete_after passes, giving an admin time to
+    restore it (e.g. a coordinated downvote wave hit a good song). Buffer 0
+    skips straight to the real delete. Failed/generating placeholders are
+    always deleted immediately: there is no audio worth reviewing.
+    """
+    row = db.one("SELECT status FROM tracks WHERE id = ?", (track_id,))
+    if not row or row["status"] in ("deleted", "trashed"):
+        return False
+    db.execute("DELETE FROM play_queue WHERE track_id = ?", (track_id,))
+    buffer_h = float(runtime_get(cfg, db, "library.deletion_buffer_hours"))
+    if row["status"] == "ready" and buffer_h > 0:
+        delete_after = iso(utcnow() + timedelta(hours=buffer_h))
+        db.execute("UPDATE tracks SET status = 'trashed', delete_after = ? WHERE id = ?",
+                   (delete_after, track_id))
+        log.info("track %s trashed until %s (%.0fh buffer)",
+                 track_id, delete_after, buffer_h)
+        return True
+    return delete_track(db, cfg, track_id)
+
+
+def undelete_track(db: DB, track_id: int) -> bool:
+    """Admin rescue: a trashed track returns to ready (votes and stats
+    untouched — the decision to keep it is human)."""
+    row = db.one("SELECT status FROM tracks WHERE id = ?", (track_id,))
+    if not row or row["status"] != "trashed":
+        return False
+    db.execute("UPDATE tracks SET status = 'ready', delete_after = NULL WHERE id = ?",
+               (track_id,))
+    log.info("track %s restored (was trashed)", track_id)
+    return True
+
+
+def trashed_bytes(db: DB) -> int:
+    return int(db.one(
+        "SELECT COALESCE(SUM(size_bytes), 0) AS n FROM tracks WHERE status = 'trashed'"
+    )["n"] or 0)
+
+
+def finalize_deletions(db: DB, cfg: Config) -> int:
+    """Empty the trash: hard-delete trashed tracks whose deadline has
+    passed. Runs on the janitor's clock and ONLY on the deadline — quota
+    pressure never fast-tracks it (that would defeat the anti-griefing
+    purpose: a vote wave plus a full disk could still destroy tracks
+    before review)."""
+    now = iso(utcnow())
+    rows = db.query("SELECT id FROM tracks WHERE status = 'trashed'"
+                    " AND delete_after IS NOT NULL AND delete_after <= ?", (now,))
+    n = 0
+    for r in rows:
+        if delete_track(db, cfg, r["id"]):
+            n += 1
+    return n
 
 
 def fail_track(db: DB, track_id: int) -> None:

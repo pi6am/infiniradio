@@ -5,9 +5,26 @@
 <div class="card">
   <h2 style="margin-top:0">track {{ t.id }} · {{ t.status }}
     {% if t.protected %}<span class="pill ok">protected</span>{% endif %}
+    {% if t.hold %}<span class="pill">held from airing</span>{% endif %}
     {% if t.is_variation %}<span class="pill">variation</span>{% endif %}</h2>
 
-  {% if t.status == 'ready' and t.playout_path %}
+  {% if t.status == 'trashed' %}
+  <p style="color:var(--bad);margin:0 0 12px">in the trash — audio kept until
+    <b>{{ t.delete_after }}</b> (deletion buffer), never aired, still counting toward the
+    quota. Review below; restore it or empty now:</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+    <form class="inline" method="post" action="/admin/track/{{ t.id }}/undelete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" style="border-color:var(--good)">↩ restore (back to ready)</button>
+    </form>
+    <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete_now">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" style="border-color:var(--bad)">delete now (skip buffer)</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if t.status in ('ready', 'trashed') and t.playout_path %}
   <audio controls src="/admin/track/{{ t.id }}/audio" style="width:100%"></audio>
   {% endif %}
 
@@ -50,6 +67,12 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button type="submit">{% if t.protected %}unprotect{% else %}protect{% endif %}</button>
     </form>
+    {% if t.status == 'ready' %}
+    <form class="inline" method="post" action="/admin/track/{{ t.id }}/hold">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" title="the DJ never picks held tracks; queueing one manually (air next) still works">{% if t.hold %}resume airing{% else %}hold from airing{% endif %}</button>
+    </form>
+    {% endif %}
     <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button type="submit">delete (skips if airing)</button>

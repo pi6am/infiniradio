@@ -16,7 +16,7 @@ import logging
 
 from .config import Config, runtime_get
 from .db import DB
-from .library import delete_track, disk_usage
+from .library import delete_track, disk_usage, finalize_deletions
 from .util import human_bytes, wilson_score
 
 log = logging.getLogger(__name__)
@@ -67,11 +67,20 @@ def _eviction_candidates(db: DB, active_ids: set[int]) -> list[dict]:
 
 
 def run_janitor(db: DB, cfg: Config, active_ids: set[int]) -> dict:
-    """Downvote auto-evict + over-quota eviction. Returns a summary."""
-    summary = {"downvote_evicted": 0, "quota_evicted": 0}
+    """Empty expired trash, downvote auto-evict, over-quota eviction.
+
+    Deletion goes through the buffer (library.deletion_buffer_hours): evicted
+    tracks are condemned to status 'trashed' — audio kept, still counting
+    toward the quota that pauses generation — and only the deadline (never
+    quota pressure) turns trashed into a real deletion.
+    """
+    from .library import schedule_delete, trashed_bytes
+
+    summary = {"finalized": 0, "downvote_evicted": 0, "quota_evicted": 0}
+    summary["finalized"] = finalize_deletions(db, cfg)
 
     # 1. Tracks the audience has rejected: net votes at/below threshold after
-    #    enough plays. They had their chances.
+    #    enough plays. They had their chances — trashed, not gone.
     net = runtime_get(cfg, db, "dj.downvote_evict_net")
     plays = runtime_get(cfg, db, "dj.downvote_evict_plays")
     doomed = db.query(
@@ -82,22 +91,28 @@ def run_janitor(db: DB, cfg: Config, active_ids: set[int]) -> dict:
     for r in doomed:
         if r["id"] in active_ids:
             continue
-        if delete_track(db, cfg, r["id"]):
+        if schedule_delete(db, cfg, r["id"]):
             summary["downvote_evicted"] += 1
 
     # 2. If still over quota, evict played tracks (worst first) until we are
-    #    back under the resume threshold or nothing is evictable.
+    #    back under the resume threshold or nothing is evictable. The
+    #    decision uses usage minus trashed bytes — trashed tracks' space is
+    #    already earmarked for release at their deadlines, so they must not
+    #    trick this pass into condemning ever more tracks. Real usage (which
+    #    pauses generation) still counts them, per the buffer's contract.
     quota = quota_bytes(db, cfg)
     target = int(quota * RESUME_FRACTION)
-    if disk_usage(db) > quota:
+    effective = disk_usage(db) - trashed_bytes(db)
+    if effective > quota:
         for row in _eviction_candidates(db, active_ids):
-            if disk_usage(db) <= target:
+            if disk_usage(db) - trashed_bytes(db) <= target:
                 break
-            if delete_track(db, cfg, row["id"]):
+            if schedule_delete(db, cfg, row["id"]):
                 summary["quota_evicted"] += 1
-                log.info("quota eviction: removed track %s (%s), usage now %s",
-                         row["id"], row["title"], human_bytes(disk_usage(db)))
+                log.info("quota eviction: track %s (%s) trashed, effective"
+                         " usage now %s", row["id"], row["title"],
+                         human_bytes(disk_usage(db) - trashed_bytes(db)))
 
-    if summary["downvote_evicted"] or summary["quota_evicted"]:
+    if any(summary.values()):
         log.info("janitor: %s", summary)
     return summary

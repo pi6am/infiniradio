@@ -74,6 +74,11 @@ DEFAULTS: dict[str, Any] = {
         "data_dir": "data",
         "playout_bitrate": "192k",
         "loudness_target": -16.0,
+        # Deletion buffer: condemned tracks keep their audio on disk (still
+        # counting toward quota, never aired) for this long before the
+        # janitor really deletes them — review time against coordinated
+        # downvote attacks. 0 = delete immediately (ephemeral mode).
+        "deletion_buffer_hours": 24.0,
     },
     "stream": {
         "segment_seconds": 6,
@@ -191,6 +196,10 @@ RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
     "dj.downvote_evict_net": (-2, int, "Downvote eviction votes", "Net votes at or below this makes a track eligible for early eviction"),
     "dj.downvote_evict_plays": (2, int, "Downvote eviction plays", "... after this many plays (give it a chance first)"),
     "library.quota_gb": (50.0, float, "Disk quota (GiB)", "Generation pauses when music files exceed this; nothing unplayed is ever deleted"),
+    "library.deletion_buffer_hours": (24.0, float, "Deletion buffer (hours)",
+                                      "Condemned tracks keep their audio (counting toward quota, never aired) "
+                                      "for this long before real deletion — review time against downvote waves. "
+                                      "Admin can restore while trashed. 0 = delete immediately"),
 }
 
 

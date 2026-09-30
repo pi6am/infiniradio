@@ -108,6 +108,10 @@ min_chars = 300           # reject planned scores shorter than this
 data_dir = "data"         # database, music files and HLS segments live under here
 playout_bitrate = "192k"  # bitrate of the normalized playout copy
 loudness_target = -16.0   # LUFS target for playout normalization
+deletion_buffer_hours = 24.0  # runtime: condemned tracks keep their audio this
+                              # long (never aired, still counting toward quota)
+                              # before real deletion — review time against
+                              # downvote waves; 0 = delete immediately
 
 [stream]
 segment_seconds = 6

@@ -67,11 +67,12 @@ def recent_track_ids(db: DB, n: int) -> set[int]:
 
 def eligible_tracks(db: DB, cfg, exclude_ids: set[int] = set()) -> list[dict]:
     """Ready tracks the DJ may pick right now without violating the repeat
-    windows: not among the most recent repeat_window_tracks airs, and not
-    played within repeat_window_hours."""
+    windows: not among the most recent repeat_window_tracks airs, not
+    played within repeat_window_hours. Trashed and held tracks are
+    never eligible (hold is the admin's 'never air this' switch)."""
     last_n = recent_track_ids(db, runtime_get(cfg, db, "dj.repeat_window_tracks"))
     cutoff = iso(utcnow() - timedelta(hours=runtime_get(cfg, db, "dj.repeat_window_hours")))
-    rows = db.query("SELECT * FROM tracks WHERE status = 'ready'")
+    rows = db.query("SELECT * FROM tracks WHERE status = 'ready' AND hold = 0")
     return [r for r in rows
             if r["id"] not in last_n
             and r["id"] not in exclude_ids
@@ -83,8 +84,9 @@ def pick_next(db: DB, cfg: Config, exclude_ids: set[int] = set()) -> dict | None
 
     if not eligible:
         # Nothing eligible (tiny library): fall back to least-recently-played.
-        rest = [r for r in db.query("SELECT * FROM tracks WHERE status = 'ready'")
-                if r["id"] not in exclude_ids]
+        rest = [r for r in db.query(
+            "SELECT * FROM tracks WHERE status = 'ready' AND hold = 0")
+            if r["id"] not in exclude_ids]
         if not rest:
             return None
         rest.sort(key=lambda r: (r["last_played_at"] is not None, r["last_played_at"] or ""))
@@ -241,7 +243,8 @@ def enabled_workflows(rt) -> list:
 def variation_parent(db: DB, cfg: Config) -> dict | None:
     threshold = runtime_get(cfg, db, "dj.variation_score_threshold")
     rows = db.query(
-        "SELECT * FROM tracks WHERE status = 'ready' AND abc_text != '' AND parent_track_id IS NULL"
+        "SELECT * FROM tracks WHERE status = 'ready' AND hold = 0"
+        " AND abc_text != '' AND parent_track_id IS NULL"
     )
     scored = [
         (wilson_score(r["vote_up"], r["vote_down"]), r) for r in rows

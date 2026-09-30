@@ -209,6 +209,16 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE tracks ADD COLUMN style_id INTEGER REFERENCES styles(id);
     CREATE INDEX idx_tracks_style ON tracks(style_id);
     """,
+    9: """
+    -- Deletion buffer: a condemned track first moves to status 'trashed'
+    -- (audio kept on disk, still counting toward quota, never aired) until
+    -- delete_after passes — protection against a wave of malicious
+    -- downvotes deleting good music before anyone can review it. An admin
+    -- can restore it while trashed. hold: admin-set "never air this track"
+    -- regardless of votes or status.
+    ALTER TABLE tracks ADD COLUMN delete_after TEXT;
+    ALTER TABLE tracks ADD COLUMN hold INTEGER NOT NULL DEFAULT 0;
+    """,
 }
 
 
