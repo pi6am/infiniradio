@@ -548,15 +548,18 @@ async def prompts_page(request: Request):
         tags.append({"name": t["name"], "aired": stats["aired"],
                      "avg_score": round(stats["avg_score"], 3), "tracks": tracks})
     workflows = []
+    admin_off = set(rt.db.get_setting("workflows_disabled") or [])
     for w in getattr(rt, "workflows", {}).values():
         stats = dj.workflow_air_stats(rt.db, w.name)
         tracks = rt.db.one(
             "SELECT COUNT(*) AS n FROM tracks WHERE workflow_id = ? AND status != 'deleted'",
             (w.name,))["n"]
+        on = w.enabled and w.name not in admin_off
         weight = (dj.workflow_weight(rt.db, rt.cfg, w.name)
-                  if rt.llm is not None and w.enabled else None)
+                  if rt.llm is not None and on else None)
         workflows.append({"name": w.name, "description": w.description,
-                          "enabled": w.enabled, "stages": len(w.stages),
+                          "enabled": on, "file_enabled": w.enabled,
+                          "stages": len(w.stages),
                           "tags": list(w.static_tags), "tracks": tracks,
                           "aired": stats["aired"],
                           "avg_score": round(stats["avg_score"], 3),
@@ -565,6 +568,25 @@ async def prompts_page(request: Request):
         request, "admin/prompts.html",
         _ctx(request, prompts=prompts, tags=tags, workflows=workflows,
              has_llm=rt.llm is not None))
+
+
+@router.post("/workflows/{workflow_id}/toggle")
+async def workflow_toggle(request: Request, workflow_id: str, csrf: str = Form("")):
+    """Enable/disable a lyrics workflow at runtime (settings table — no
+    file edits, no restart; the DJ stops commissioning it immediately,
+    queued jobs still finish)."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    if workflow_id not in getattr(rt, "workflows", {}):
+        return PlainTextResponse("no such workflow", status_code=404)
+    disabled = list(rt.db.get_setting("workflows_disabled") or [])
+    if workflow_id in disabled:
+        disabled.remove(workflow_id)
+    else:
+        disabled.append(workflow_id)
+    rt.db.set_setting("workflows_disabled", disabled)
+    return RedirectResponse(_back(request, "/admin/prompts"), status_code=303)
 
 
 def _prompt_form(request: Request, prompt_id: int | None):
@@ -1033,7 +1055,7 @@ async def generate_form(request: Request):
         return _login_redirect()
     rt = request.app.state.rt
     prompts = rt.db.query("SELECT * FROM prompts WHERE enabled = 1 ORDER BY name")
-    workflows = [w for w in getattr(rt, "workflows", {}).values() if w.enabled]
+    workflows = dj.enabled_workflows(rt)
     styles = rt.db.query("SELECT id, name, description FROM styles WHERE enabled = 1"
                          " ORDER BY name") if rt.llm is not None else []
     return request.app.state.templates.TemplateResponse(

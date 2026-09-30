@@ -101,7 +101,12 @@ model = "glm-4.5-air"        # must match the endpoint's model name
 
 Workflows live in `lyrics_workflows/<name>/` — a `workflow.toml` plus one
 Jinja template per stage prompt; two ship as examples (`jp-title-first`,
-its Chinese-drafting twin `zh-title-first`). Audition prompts and runs
+its Chinese-drafting twin `zh-title-first`). **Enable/disable is live from
+the admin panel** (prompts page) — no file edits or restarts on the
+server; `enabled = false` in the TOML is the boot-time default and can
+only be changed in git. The `dj.lyrics_share` runtime setting controls
+what fraction of fresh commissions use a lyrics workflow; within that
+pool, listener votes arbitrate via the weighted bandit. Audition prompts and runs
 without a server:
 
 ```bash

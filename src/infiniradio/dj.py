@@ -201,26 +201,41 @@ def pick_prompt(db: DB, cfg, exclude_prompt_id: int | None = None) -> dict | Non
 
 
 def pick_generator(rt) -> tuple[str, object] | None:
-    """('prompt', row) or ('workflow', WorkflowSpec) — one bandit over both.
+    """A fresh commission's generator: ('prompt', row) or ('workflow', spec).
 
-    Lyrics workflows join the same weighted selection as prompts (weight =
-    base + avg Wilson of aired tracks), so the community's votes pick
-    between variants without a separate mechanism. Workflows only compete
-    while an LLM client is configured.
+    dj.lyrics_share of fresh jobs go to lyrics workflows when any are
+    enabled (and an LLM is configured); the rest use instrumental prompts.
+    Within the chosen pool the usual weighted-bandit rule applies (weight =
+    base + avg Wilson of aired tracks), so votes still steer which
+    workflow / which prompt wins.
     """
-    candidates: list[tuple[str, object]] = [
-        ("prompt", p) for p in rt.db.query("SELECT * FROM prompts WHERE enabled = 1")
-    ]
-    if rt.llm is not None and getattr(rt, "workflows", None):
-        candidates += [("workflow", w) for w in rt.workflows.values() if w.enabled]
-    if not candidates:
+    prompts = [("prompt", p) for p in rt.db.query("SELECT * FROM prompts WHERE enabled = 1")]
+    workflows: list[tuple[str, object]] = []
+    if rt.llm is not None:
+        workflows = [("workflow", w) for w in enabled_workflows(rt)]
+    if prompts and workflows:
+        share = runtime_get(rt.cfg, rt.db, "dj.lyrics_share")
+        pool = workflows if random.random() < share else prompts
+    else:
+        pool = workflows or prompts
+    if not pool:
         return None
     weights = [
         prompt_weight(rt.db, rt.cfg, c[1]["id"]) if c[0] == "prompt"
         else workflow_weight(rt.db, rt.cfg, c[1].name)
-        for c in candidates
+        for c in pool
     ]
-    return random.choices(candidates, weights=weights, k=1)[0]
+    return random.choices(pool, weights=weights, k=1)[0]
+
+
+def enabled_workflows(rt) -> list:
+    """Workflows selectable right now: enabled in their workflow.toml AND
+    not switched off from the admin panel. The admin override lives in the
+    settings table, so disabling a workflow on a running server is one
+    click — no file edits, no restart (queued jobs still finish)."""
+    disabled = set(rt.db.get_setting("workflows_disabled") or [])
+    return [w for w in getattr(rt, "workflows", {}).values()
+            if w.enabled and w.name not in disabled]
 
 
 def variation_parent(db: DB, cfg: Config) -> dict | None:

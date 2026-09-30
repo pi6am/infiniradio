@@ -4,8 +4,11 @@ One directory per workflow: a `workflow.toml` control-flow file plus one
 Jinja template per LLM prompt. Everything content-related lives here; the
 engine (`src/infiniradio/lyrics.py`) is generic. Workflows are loaded and
 validated once at server startup — a broken workflow is a startup error,
-never a silent skip — and there is no hot reload (edit + restart, like the
-`names/` word lists).
+never a silent skip — and template/control-flow changes need a restart
+(like the `names/` word lists). The exception is enable/disable: the admin
+panel (prompts page) toggles workflows live via a settings-table override
+— no file edits, no restart; queued jobs still finish. `dj.lyrics_share`
+sets what fraction of fresh commissions use a lyrics workflow at all.
 
 ```
 lyrics_workflows/

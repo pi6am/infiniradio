@@ -164,6 +164,10 @@ RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
     "dj.style_base_weight": (0.5, float, "Style selection base weight",
                              "Same rule for song styles (lyrics workflows): weight = this plus the "
                              "average Wilson score of the style's aired tracks"),
+    "dj.lyrics_share": (0.5, float, "Lyrics workflow share",
+                        "Fraction of fresh commissions that use a lyrics workflow when one "
+                        "is enabled; the rest use instrumental prompts. Votes still steer "
+                        "the pick within each pool (0 = instrumental only, 1 = lyrics only)"),
     "dj.max_queued_jobs": (1, int, "Max queued generation jobs",
                            "Commission at most this many jobs ahead of the one running; keeps decisions "
                            "just-in-time (latest prompts and votes)"),

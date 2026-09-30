@@ -43,21 +43,32 @@
 {% if workflows %}
 <div class="card">
   <h2 style="margin-top:0">lyrics workflows</h2>
-  <p class="muted">File-defined LLM pipelines (lyrics_workflows/&lt;name&gt;/workflow.toml; edit on
-    disk and restart). Workflows join the same weighted selection as prompts — listener votes
-    arbitrate between variants. The <span class="pill">lyrics</span> phase runs on the LLM while
-    earlier jobs render.</p>
+  <p class="muted">File-defined LLM pipelines (lyrics_workflows/&lt;name&gt;/workflow.toml). The
+    <b>enable/disable toggle is live</b> — it takes effect immediately, without editing files or
+    restarting the server; queued jobs still finish. Workflows compete for the
+    <a href="/admin/settings">lyrics workflow share</a> of fresh commissions, and within that pool
+    listener votes arbitrate via the weighted bandit.</p>
   <table>
-    <tr><th>workflow</th><th>enabled</th><th>stages</th><th>static tags</th><th>tracks</th><th>weight</th></tr>
+    <tr><th>workflow</th><th>enabled</th><th>stages</th><th>static tags</th><th>tracks</th><th>weight</th><th></th></tr>
     {% for w in workflows %}
     <tr>
       <td title="{{ w.description }}">{{ w.name }}</td>
-      <td>{% if w.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</td>
+      <td>{% if w.enabled %}<span class="pill ok">on</span>
+        {% elif not w.file_enabled %}<span class="pill">off · file</span>
+        {% else %}<span class="pill">off</span>{% endif %}</td>
       <td class="muted">{{ w.stages }}</td>
       <td class="muted">{{ w.tags | join(', ') or '—' }}</td>
       <td class="muted">{{ w.tracks }}</td>
       <td class="muted">{{ w.weight if w.weight is not none else '—' }}
         <span title="selection weight">(avg {{ w.avg_score }} · {{ w.aired }} aired)</span></td>
+      <td>
+        {% if w.file_enabled %}
+        <form class="inline" method="post" action="/admin/workflows/{{ w.name }}/toggle">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">{{ 'disable' if w.enabled else 'enable' }}</button>
+        </form>
+        {% else %}<span class="muted" title="enabled = false in workflow.toml — edit the file to change">file-disabled</span>{% endif %}
+      </td>
     </tr>
     {% endfor %}
   </table>
