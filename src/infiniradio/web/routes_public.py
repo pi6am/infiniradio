@@ -236,11 +236,20 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
 
 # ------------------------------------------------------------------ pages
 
+def _site_base(request: Request) -> str:
+    """Absolute base URL for og:url/og:image: site.base_url when configured
+    (canonical, works even for crawlers arriving via a redirect or wrong
+    scheme), else derived from the request (dev/LAN)."""
+    rt = request.app.state.rt
+    configured = str(rt.cfg.get("site.base_url", "") or "").strip().rstrip("/")
+    return configured or str(request.base_url).rstrip("/")
+
+
 @router.get("/", response_class=HTMLResponse)
 async def player(request: Request):
     listener = ensure_listener(request)
-    resp = request.app.state.templates.TemplateResponse(request, "player.html",
-                                                        {"request": request})
+    resp = request.app.state.templates.TemplateResponse(
+        request, "player.html", {"request": request, "site_base": _site_base(request)})
     if listener[1]:
         _set_cookie(resp, listener[1], request)
     return resp

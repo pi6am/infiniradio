@@ -22,6 +22,13 @@ DEFAULTS: dict[str, Any] = {
         "port": 8000,
         "secret": "",
     },
+    "site": {
+        # Canonical absolute URL (e.g. "https://infiniradio.ai") used for
+        # Open Graph og:url/og:image on the player page so link previews
+        # (Discord, Telegram, ...) resolve absolute URLs regardless of how
+        # the crawler arrived. Empty = derive from each request (dev/LAN).
+        "base_url": "",
+    },
     "admin": {
         "username": "admin",
         "password_hash": "",

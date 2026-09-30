@@ -10,6 +10,13 @@ port = 8000
 # Used to sign session cookies. Auto-generated and persisted on first run.
 secret = ""
 
+[site]
+# Canonical absolute URL for the player page's Open Graph tags (Discord /
+# Telegram / ... link previews). Set it on the public server so previews
+# point at the real domain however the crawler arrives; empty = derived
+# from each request (fine for dev/LAN).
+base_url = ""
+
 [admin]
 username = "admin"
 # Set with:  python -m infiniradio passwd

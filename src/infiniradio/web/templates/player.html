@@ -1,5 +1,17 @@
 {% extends "base.html" %}
 {% block title %}infiniradio — listen{% endblock %}
+{% block head %}
+{# Link-unfurl preview card (Discord, Telegram, Slack, iMessage, X...).
+   Discord caches unfurls per URL forever — after changing these, force a
+   re-crawl by sharing the link with a dummy query (?v=2). #}
+<meta property="og:site_name" content="infiniradio">
+<meta property="og:title" content="infiniradio — infinite radio">
+<meta property="og:description" content="An endless stream of music.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="{{ site_base }}/">
+<meta property="og:image" content="{{ site_base }}/static/android-chrome-512x512.png">
+<meta name="twitter:card" content="summary">
+{% endblock %}
 {% block content %}
 
 <section class="card">
