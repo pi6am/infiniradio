@@ -24,6 +24,7 @@
     <tr><th>prompt</th><td>{{ t.prompt_name }}</td></tr>
     {% if t.workflow_id %}<tr><th>workflow</th><td>{{ t.workflow_id }}
       <span class="muted">(lyrics pipeline)</span></td></tr>{% endif %}
+    {% if t.style_name %}<tr><th>style</th><td>{{ t.style_name }}</td></tr>{% endif %}
     {% if t.theme_title %}<tr><th>theme title</th><td>{{ t.theme_title }}
       <span class="muted">(seed that themed the lyrics; shown as the on-air subtitle)</span></td></tr>{% endif %}
     {% if t.tags %}<tr><th>tags</th><td>{% for tag in t.tags %}<span class="pill">{{ tag }}</span> {% endfor %}</td></tr>{% endif %}

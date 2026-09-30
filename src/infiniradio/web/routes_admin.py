@@ -4,8 +4,10 @@ Jinja2 + htmx-free plain forms (full page submissions) to keep it simple."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -52,9 +54,12 @@ def _csrf_ok(request: Request, submitted: str) -> bool:
 def _track_with_meta(db, row: dict) -> dict:
     prompt = db.one("SELECT name FROM prompts WHERE id = ?", (row["prompt_id"],)) \
         if row["prompt_id"] else None
+    style = db.one("SELECT name FROM styles WHERE id = ?", (row["style_id"],)) \
+        if row.get("style_id") else None
     out = dict(row)
     out["prompt_name"] = prompt["name"] if prompt else (
         "custom" if row["style_text"] else "?")
+    out["style_name"] = style["name"] if style else ""
     # Display subtitle (library/aired tables): theme title for workflow
     # tracks, else prompt name, else the workflow slug.
     out["subtitle"] = row.get("theme_title") or out["prompt_name"] \
@@ -133,9 +138,10 @@ async def dashboard(request: Request):
     )
     gen_status = await rt.generator.status() if rt.generator else {"backend": "off", "ok": None}
     llm_status = await rt.llm.status() if rt.llm else {"backend": "off", "ok": None}
-    jobs = db.query("SELECT j.*, p.name AS prompt_name, pt.title AS parent_title"
+    jobs = db.query("SELECT j.*, p.name AS prompt_name, st.name AS style_name, pt.title AS parent_title"
                     " FROM generation_jobs j"
                     " LEFT JOIN prompts p ON p.id = j.prompt_id"
+                    " LEFT JOIN styles st ON st.id = j.style_id"
                     " LEFT JOIN tracks pt ON pt.id = j.parent_track_id"
                     " ORDER BY j.id DESC LIMIT 12")
     for j in jobs:
@@ -693,6 +699,197 @@ async def prompts_export(request: Request):
     return PlainTextResponse("".join(lines), media_type="text/plain")
 
 
+# ------------------------------------------------------------------ styles
+
+@router.get("/styles", response_class=HTMLResponse)
+async def styles_page(request: Request):
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    styles = []
+    for s in rt.db.query("SELECT * FROM styles ORDER BY name"):
+        stats = dj.style_air_stats(rt.db, s["id"])
+        s = dict(s)
+        s["tracks"] = rt.db.one(
+            "SELECT COUNT(*) AS n FROM tracks WHERE style_id = ? AND status != 'deleted'",
+            (s["id"],))["n"]
+        s["weight"] = round(dj.style_weight(rt.db, rt.cfg, s["id"]), 3)
+        s["avg_score"] = round(stats["avg_score"], 3)
+        s["aired"] = stats["aired"]
+        s["tags"] = library.style_tags(rt.db, s["id"])
+        styles.append(s)
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/styles.html", _ctx(request, styles=styles))
+
+
+def _style_form(request: Request, style_id: int | None):
+    rt = request.app.state.rt
+    return rt.db.one("SELECT * FROM styles WHERE id = ?", (style_id,)) if style_id else None
+
+
+@router.get("/styles/edit", response_class=HTMLResponse)
+async def style_new(request: Request):
+    if not _is_admin(request):
+        return _login_redirect()
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/style_edit.html",
+        _ctx(request, s=None, definition=_render_style_definition({}, {}), error=None,
+             action="/admin/styles/edit"))
+
+
+@router.get("/styles/edit/{style_id}", response_class=HTMLResponse)
+async def style_edit(request: Request, style_id: int):
+    if not _is_admin(request):
+        return _login_redirect()
+    row = _style_form(request, style_id)
+    if not row:
+        return RedirectResponse("/admin/styles", status_code=303)
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/style_edit.html",
+        _ctx(request, s=row, definition=_render_style_definition_row(row), error=None,
+             action=f"/admin/styles/edit/{style_id}"))
+
+
+def _render_style_definition(vars_: dict, weighted: dict) -> str:
+    from .. import styles as styles_mod
+
+    return styles_mod.render_definition(vars_, weighted)
+
+
+def _render_style_definition_row(row: dict) -> str:
+    import json as _json
+
+    return _render_style_definition(
+        _json.loads(row["vars_json"] or "{}"),
+        {k: [(w, v) for w, v in entries]
+         for k, entries in _json.loads(row["weighted_json"] or "{}").items()})
+
+
+def _upsert_style(rt, style_id: int | None, name: str, description: str,
+                  tags: str, definition: str, enabled: bool) -> str | None:
+    from .. import styles as styles_mod
+
+    if not name.strip():
+        return "Name is required."
+    try:
+        vars_, weighted = styles_mod.parse_definition(definition, "definition")
+    except styles_mod.StyleError as exc:
+        return str(exc)
+    vars_json = json.dumps(vars_, ensure_ascii=False)
+    weighted_json = json.dumps({k: [[w, v] for w, v in entries]
+                                for k, entries in weighted.items()},
+                               ensure_ascii=False)
+    try:
+        if style_id:
+            rt.db.execute(
+                "UPDATE styles SET name = ?, description = ?, vars_json = ?,"
+                " weighted_json = ?, enabled = ? WHERE id = ?",
+                (name.strip(), description, vars_json, weighted_json,
+                 int(enabled), style_id))
+        else:
+            style_id = rt.db.execute(
+                "INSERT INTO styles (name, description, vars_json, weighted_json,"
+                " enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (name.strip(), description, vars_json, weighted_json,
+                 int(enabled), iso(utcnow())))
+    except Exception:
+        return "Could not save (duplicate name?)."
+    tag_names = [t for t in re.split(r"[,\s]+", tags) if t]
+    if tag_names:
+        library.apply_style_tags(rt.db, rt.cfg, style_id, tag_names)
+    return None
+
+
+@router.post("/styles/edit")
+async def style_create(request: Request, name: str = Form(""),
+                       description: str = Form(""), tags: str = Form(""),
+                       definition: str = Form(""), enabled: bool = Form(False)):
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    err = _upsert_style(rt, None, name, description, tags, definition, enabled)
+    if err:
+        return request.app.state.templates.TemplateResponse(
+            request, "admin/style_edit.html",
+            _ctx(request, s=None, definition=definition, error=err,
+                 action="/admin/styles/edit"), status_code=400)
+    return RedirectResponse("/admin/styles", status_code=303)
+
+
+@router.post("/styles/edit/{style_id}")
+async def style_update(request: Request, style_id: int, name: str = Form(""),
+                       description: str = Form(""), tags: str = Form(""),
+                       definition: str = Form(""), enabled: bool = Form(False),
+                       csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    err = _upsert_style(rt, style_id, name, description, tags, definition, enabled)
+    if err:
+        row = _style_form(request, style_id)
+        return request.app.state.templates.TemplateResponse(
+            request, "admin/style_edit.html",
+            _ctx(request, s=row, definition=definition, error=err,
+                 action=f"/admin/styles/edit/{style_id}"), status_code=400)
+    return RedirectResponse("/admin/styles", status_code=303)
+
+
+@router.post("/styles/{style_id}/toggle")
+async def style_toggle(request: Request, style_id: int, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    row = rt.db.one("SELECT enabled FROM styles WHERE id = ?", (style_id,))
+    if row:
+        rt.db.execute("UPDATE styles SET enabled = ? WHERE id = ?",
+                      (0 if row["enabled"] else 1, style_id))
+    return RedirectResponse("/admin/styles", status_code=303)
+
+
+@router.post("/styles/{style_id}/delete")
+async def style_delete(request: Request, style_id: int, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    used = rt.db.one("SELECT COUNT(*) AS n FROM tracks WHERE style_id = ?",
+                     (style_id,))["n"]
+    if used:
+        return PlainTextResponse(
+            f"style is referenced by {used} track(s); disable it instead", status_code=409)
+    rt.db.execute("DELETE FROM style_tags WHERE style_id = ?", (style_id,))
+    rt.db.execute("UPDATE generation_jobs SET style_id = NULL"
+                  " WHERE style_id = ? AND status IN ('queued', 'cancelled')", (style_id,))
+    rt.db.execute("DELETE FROM styles WHERE id = ?", (style_id,))
+    return RedirectResponse("/admin/styles", status_code=303)
+
+
+@router.post("/styles/import")
+async def styles_import(request: Request, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    library.import_styles(rt.db, rt.cfg, only_new=False)
+    return RedirectResponse("/admin/styles", status_code=303)
+
+
+@router.get("/styles/export")
+async def styles_export(request: Request):
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    lines = ["# infiniradio style library export\n"]
+    for s in rt.db.query("SELECT * FROM styles ORDER BY id"):
+        lines.append(f"# id {s['id']}  used {s['times_used']}x\n[{s['name']}]\n")
+        lines.append(f"description = {json.dumps(s['description'])}\n")
+        lines.append(f"enabled = {bool(s['enabled'])}\n")
+        lines.append(_render_style_definition_row(s))
+        tag_names = library.style_tags(rt.db, s["id"])
+        if tag_names:
+            lines.append(f"tags = {json.dumps(tag_names)}\n")
+        lines.append("\n")
+    return PlainTextResponse("".join(lines), media_type="text/plain")
+
+
 # ------------------------------------------------------------------ jobs
 
 @router.get("/jobs", response_class=HTMLResponse)
@@ -701,9 +898,10 @@ async def jobs_page(request: Request):
         return _login_redirect()
     rt = request.app.state.rt
     jobs = rt.db.query(
-        "SELECT j.*, p.name AS prompt_name, pt.title AS parent_title"
+        "SELECT j.*, p.name AS prompt_name, st.name AS style_name, pt.title AS parent_title"
         " FROM generation_jobs j"
         " LEFT JOIN prompts p ON p.id = j.prompt_id"
+        " LEFT JOIN styles st ON st.id = j.style_id"
         " LEFT JOIN tracks pt ON pt.id = j.parent_track_id"
         " ORDER BY j.id DESC LIMIT 200")
     for j in jobs:
@@ -737,9 +935,10 @@ async def job_detail(request: Request, job_id: int):
         return _login_redirect()
     rt = request.app.state.rt
     job = rt.db.one(
-        "SELECT j.*, p.name AS prompt_name, pt.title AS parent_title"
+        "SELECT j.*, p.name AS prompt_name, st.name AS style_name, pt.title AS parent_title"
         " FROM generation_jobs j"
         " LEFT JOIN prompts p ON p.id = j.prompt_id"
+        " LEFT JOIN styles st ON st.id = j.style_id"
         " LEFT JOIN tracks pt ON pt.id = j.parent_track_id"
         " WHERE j.id = ?", (job_id,))
     if not job:
@@ -835,15 +1034,17 @@ async def generate_form(request: Request):
     rt = request.app.state.rt
     prompts = rt.db.query("SELECT * FROM prompts WHERE enabled = 1 ORDER BY name")
     workflows = [w for w in getattr(rt, "workflows", {}).values() if w.enabled]
+    styles = rt.db.query("SELECT id, name, description FROM styles WHERE enabled = 1"
+                         " ORDER BY name") if rt.llm is not None else []
     return request.app.state.templates.TemplateResponse(
         request, "admin/generate.html",
-        _ctx(request, prompts=prompts, workflows=workflows,
+        _ctx(request, prompts=prompts, workflows=workflows, styles=styles,
              has_llm=rt.llm is not None))
 
 
 @router.post("/generate")
 async def generate_submit(request: Request, prompt_id: int = Form(0),
-                          workflow_id: str = Form(""),
+                          workflow_id: str = Form(""), style_id: int = Form(0),
                           custom_name: str = Form(""), custom_style: str = Form(""),
                           custom_song: str = Form("[Intro]\n\n[Instrumental]\n\n[Outro]"),
                           csrf: str = Form("")):
@@ -857,7 +1058,15 @@ async def generate_submit(request: Request, prompt_id: int = Form(0),
             return PlainTextResponse("no such lyrics workflow (or LLM disabled)",
                                      status_code=400)
     if workflow is not None:
-        dj.enqueue_job(rt.db, workflow_id=workflow.name)
+        # No explicit style chosen -> let the DJ's weighted pick decide.
+        style = None
+        if style_id:
+            style = rt.db.one("SELECT id FROM styles WHERE id = ? AND enabled = 1",
+                              (style_id,))
+        elif workflow.styled:
+            style = dj.pick_style(rt)
+        dj.enqueue_job(rt.db, workflow_id=workflow.name,
+                       style_id=style["id"] if style else None)
     elif prompt_id:
         prompt = rt.db.one("SELECT id FROM prompts WHERE id = ?", (prompt_id,))
         if prompt:

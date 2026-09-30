@@ -89,19 +89,20 @@ def track_dir(cfg: Config, track_id: int) -> Path:
 def create_track(db: DB, cfg: Config, *, prompt_id: int | None, parent_track_id: int | None,
                  style_text: str, lyrics_snapshot: str, seed: int, cot_mode: str,
                  workflow_id: str | None = None, title: str = "",
-                 theme_title: str = "") -> int:
+                 theme_title: str = "", style_id: int | None = None) -> int:
     """Placeholder row for a generating track.
 
     title: set (LLM-extracted song name) when the workflow produced one;
     empty for a random naming title assigned at ingest. theme_title: the
     seed title that themed the lyrics workflow — shown as the display
-    subtitle for workflow tracks.
+    subtitle for workflow tracks. style_id: the style the DJ picked for
+    this job (lineage + per-style vote aggregation).
     """
     track_id = db.execute(
-        "INSERT INTO tracks (title, parent_track_id, prompt_id, workflow_id, theme_title,"
-        " style_text, lyrics_snapshot, seed, cot_mode, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'generating', ?)",
-        (title, parent_track_id, prompt_id, workflow_id, theme_title or "",
+        "INSERT INTO tracks (title, parent_track_id, prompt_id, workflow_id, style_id,"
+        " theme_title, style_text, lyrics_snapshot, seed, cot_mode, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generating', ?)",
+        (title, parent_track_id, prompt_id, workflow_id, style_id, theme_title or "",
          style_text, lyrics_snapshot, seed, cot_mode, iso(utcnow())),
     )
     track_dir(cfg, track_id).mkdir(parents=True, exist_ok=True)
@@ -349,12 +350,76 @@ def prompt_tags(db: DB, prompt_id: int) -> list[str]:
         " WHERE pt.prompt_id = ? ORDER BY t.name", (prompt_id,))]
 
 
+def style_tags(db: DB, style_id: int) -> list[str]:
+    return [r["name"] for r in db.query(
+        "SELECT t.name FROM style_tags st JOIN tags t ON t.id = st.tag_id"
+        " WHERE st.style_id = ? ORDER BY t.name", (style_id,))]
+
+
+def apply_style_tags(db: DB, cfg: Config, style_id: int, names: list[str]) -> list[str]:
+    applied: list[str] = []
+    for name in names:
+        tag_id = _tag_id(db, cfg, name)
+        if tag_id is None:
+            continue
+        db.execute("INSERT OR IGNORE INTO style_tags (style_id, tag_id) VALUES (?, ?)",
+                   (style_id, tag_id))
+        applied.append(normalize_tag(name))
+    return applied
+
+
 def tag_vocabulary(db: DB) -> list[str]:
     """LLM-pickable tag names — what a workflow's tagging stage is offered.
     Forced/static tags (vocal, english, prompt genres) are never in this
     list; presenting them as choices is what makes the LLM dither."""
     return [r["name"] for r in db.query(
         "SELECT name FROM tags WHERE llm_pickable = 1 ORDER BY name")]
+
+
+# ---------------------------------------------------------------- style seeds
+
+def import_styles(db: DB, cfg: Config, only_new: bool = True) -> int:
+    """Import TOML style seeds from styles.seed_dir. Skips existing names
+    unless only_new is false (the admin "re-import seeds" button), which
+    updates definitions in place. The prompts lifecycle: after first boot
+    the database is the source of truth."""
+    from . import styles as styles_mod
+
+    seed_dir = cfg.path("styles.seed_dir")
+    if not seed_dir.is_dir():
+        return 0
+    imported = 0
+    for f in sorted(seed_dir.glob("*.toml")):
+        try:
+            style = styles_mod.load_style_file(f)
+        except styles_mod.StyleError as exc:
+            log.warning("style seed %s failed: %s", f.name, exc)
+            continue
+        exists = db.one("SELECT id FROM styles WHERE name = ?", (style.name,))
+        if exists and only_new:
+            continue
+        vars_json = json.dumps(style.vars, ensure_ascii=False)
+        weighted_json = json.dumps({k: [[w, v] for w, v in entries]
+                                    for k, entries in style.weighted.items()},
+                                   ensure_ascii=False)
+        if exists:
+            db.execute(
+                "UPDATE styles SET description = ?, vars_json = ?, weighted_json = ?,"
+                " enabled = ? WHERE id = ?",
+                (style.description, vars_json, weighted_json, int(style.enabled), exists["id"]))
+            style_id = exists["id"]
+        else:
+            style_id = db.execute(
+                "INSERT INTO styles (name, description, vars_json, weighted_json,"
+                " enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (style.name, style.description, vars_json, weighted_json,
+                 int(style.enabled), iso(utcnow())))
+        if style.tags:
+            apply_style_tags(db, cfg, style_id, list(style.tags))
+        imported += 1
+    if imported:
+        log.info("imported %d style(s) from %s", imported, seed_dir)
+    return imported
 
 
 # ---------------------------------------------------------------- prompt seeds

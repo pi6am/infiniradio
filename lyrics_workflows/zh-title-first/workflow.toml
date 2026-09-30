@@ -10,11 +10,19 @@ name = "zh-title-first"
 description = "random title → brainstorm → Chinese draft → English translation → style → rhythm refine"
 enabled = true
 seed_title = true
+# The DJ picks a style for this workflow (styles table; see styles/*.toml).
+styled = true
 tags = ["vocal", "english"]
 
 [params]
 language = "Chinese"
 script_note = "using simplified Chinese characters"
+
+[vars]
+# Defaults for style-override variables (empty string = no guidance).
+style_guide = ""
+structure_guide = ""
+rhyme_guide = "Don't enforce rhymes at the end of lines unless it's natural to do so, but internal rhymes are encouraged."
 
 [output]
 title = "song_name"       # extracted from the name stage; falls back to the seed title

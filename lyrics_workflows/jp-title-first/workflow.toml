@@ -10,26 +10,24 @@ name = "jp-title-first"
 description = "random title → brainstorm → Japanese draft → English translation → style → rhythm refine"
 enabled = true
 seed_title = true
+# The DJ picks a style for this workflow (styles table; see styles/*.toml).
+# A style supplies style_guide/structure_guide/rhyme_guide values as plain
+# template variables; [vars] below are the defaults an unstyled run uses.
+styled = true
 tags = ["vocal", "english"]
 
 [params]
 language = "Japanese"
 script_note = "using kanji, hiragana and katakana as appropriate"
+
+[vars]
+# Defaults for style-override variables (empty string = no guidance).
+# Templates read these at top level: {{ style_guide }}, etc.
 style_guide = ""
-#style_guide = "A fast-paced and energetic J-pop-style intro to an anime. It should be catchy and have a strong hook."
-#style_guide = "A dark industrial techno EDM track. Heavy beat and layered harmonics."
-#style_guide = "An indie rock grunge track from the 1990s."
-#style_guide = "An R&B house dance pop rock song. Catchy, fast paced, with a strong dance beat."
-#style_guide = "A prog rock anthem. Heavy layered guitar and drums with a complex message."
-lyrics_guide = ""
-#lyrics_guide = "Repetitive catchy hook. Short lines with six to eight lines per verse. Repetitive lyrics."
-#lyrics_guide = "Repetitive catchy hook. Each verse has four lines. The chorus has two lines repeated twice each."
-#lyrics_guide = "Repetitive catchy hook. Each verse has five lines. The chorus has one strong line repeated three times."
-#lyrics_guide = "Fast paced and punchy. Each verse has five lines with a complementary chorus that progresses each time it repeats."
-#rhyme_guide = ""
+structure_guide = ""
+# The default rhyme discipline is kept even for styled runs where the
+# style doesn't override it.
 rhyme_guide = "Don't enforce rhymes at the end of lines unless it's natural to do so, but internal rhymes are encouraged."
-#rhyme_guide = "Rewrite stanzas to follow an AABCDD rhyming pattern when possible. Use complex rhymes, internal rhymes are encouraged."
-#rhyme_guide = "Rewrite stanzas to follow an ABABCD rhyming pattern when possible. Internal rhymes are encouraged."
 
 [output]
 title = "song_name"       # extracted from the name stage; falls back to the seed title

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}admin — styles{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">style library</h2>
+    <div>
+      <form class="inline" method="post" action="/admin/styles/import">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" title="re-read styles/*.toml, updating definitions in place">re-import seeds</button>
+      </form>
+      <a class="btn" href="/admin/styles/export">export</a>
+      <a class="btn" href="/admin/styles/edit">new style</a>
+    </div>
+  </div>
+  <p class="muted">A style is a bundle of workflow variables: fixed overrides (<b>style_guide</b> —
+    genre/mood/energy direction) plus weighted choices (<b>structure_guide</b>, <b>rhyme_guide</b>)
+    resolved by seeded RNG per job. Selection weight = <a href="/admin/settings">style base weight</a>
+    + the average Wilson score of the style's aired tracks — listener votes steer which styles
+    the DJ picks, exactly like prompts.</p>
+  <table>
+    <tr><th>name</th><th>enabled</th><th>tags</th><th>tracks</th><th>weight</th><th>used</th><th>last used</th><th></th></tr>
+    {% for s in styles %}
+    <tr>
+      <td><a href="/admin/styles/edit/{{ s.id }}">{{ s.name }}</a>
+        <div class="muted" style="font-size:12px">{{ s.description }}</div></td>
+      <td>{% if s.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</td>
+      <td class="muted">{{ s.tags | join(', ') or '—' }}</td>
+      <td class="muted">{{ s.tracks }}</td>
+      <td class="muted">{{ s.weight }} <span title="selection weight">(avg {{ s.avg_score }} · {{ s.aired }} aired)</span></td>
+      <td class="muted">{{ s.times_used }}</td>
+      <td class="muted">{{ s.last_used_at or '—' }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/styles/{{ s.id }}/toggle">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">{{ 'disable' if s.enabled else 'enable' }}</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">no styles — import the seeds or create one</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

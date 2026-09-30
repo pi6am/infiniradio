@@ -17,11 +17,11 @@ Style prompt:
 ```
 {prompt here}
 ```
-{% if params.style_guide %}
+{% if style_guide %}
 
-{{ params.style_guide }}
+{{ style_guide }}
 {% endif %}
-{% if params.lyrics_guide %}
+{% if structure_guide %}
 
-{{ params.lyrics_guide }}
+{{ structure_guide }}
 {% endif %}

@@ -1,0 +1,23 @@
+# Seed styles, transcribed from the hand-tested style_guide examples in
+# the workflow plus structure/rhyme variations. style_guide is deliberately
+# general (genre/mood/energy — several stages consume it); structure_guide
+# is purely structural (lines per section, chorus repetition, line length);
+# rhyme_guide weights follow the style's repetitive-ness.
+name = "jpop-anime"
+description = "fast, energetic J-pop with a strong hook"
+enabled = true
+tags = ["pop"]
+
+[vars]
+style_guide = "A fast-paced and energetic J-pop-style intro to an anime. It should be catchy and have a strong hook."
+
+[weighted]
+structure_guide = [
+  { weight = 3, value = "Repetitive catchy hook. Each verse has four lines. The chorus has two lines repeated twice each." },
+  { weight = 2, value = "Repetitive catchy hook. Short lines with six to eight lines per verse. Repetitive lyrics." },
+  { weight = 1, value = "Fast paced and punchy. Each verse has five lines with a complementary chorus that progresses each time it repeats." },
+]
+rhyme_guide = [
+  { weight = 0, value = "Rewrite stanzas to follow an AABCDD rhyming pattern when possible. Use complex rhymes, internal rhymes are encouraged." },
+  { weight = 1, value = "Don't enforce rhymes at the end of lines unless it's natural to do so, but internal rhymes are encouraged." },
+]

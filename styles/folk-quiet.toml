@@ -1,0 +1,20 @@
+# The unguided pipeline's natural attractor (acoustic ambient folk at
+# ~75 BPM), kept as ONE arm among many instead of the default outcome.
+name = "folk-quiet"
+description = "slow, sparse acoustic folk/ambient"
+enabled = true
+tags = ["folk"]
+
+[vars]
+style_guide = "A quiet, intimate folk song. Sparse arrangement, unhurried, meditative."
+
+[weighted]
+structure_guide = [
+  { weight = 3, value = "Sparse and imagistic. Verses of four lines with room to breathe, a chorus of two to four lines." },
+  { weight = 2, value = "Narrative and unhurried. Verses of six to eight short lines, the chorus repeats with small variations." },
+  { weight = 1, value = "Minimal. Two verses and a repeated two-line refrain." },
+]
+rhyme_guide = [
+  { weight = 3, value = "Don't enforce rhymes at the end of lines unless it's natural to do so, but internal rhymes are encouraged." },
+  { weight = 0, value = "Rewrite stanzas to follow an ABABCD rhyming pattern when possible. Internal rhymes are encouraged." },
+]

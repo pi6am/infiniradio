@@ -1,0 +1,18 @@
+name = "industrial-techno"
+description = "dark industrial techno / EDM, heavy beat and layered harmonics"
+enabled = true
+tags = ["techno", "edm", "electronic"]
+
+[vars]
+style_guide = "A dark industrial techno EDM track. Heavy beat and layered harmonics."
+
+[weighted]
+structure_guide = [
+  { weight = 3, value = "Repetitive catchy hook. Short lines with six to eight lines per verse. Repetitive lyrics." },
+  { weight = 2, value = "Repetitive catchy hook. Each verse has five lines. The chorus has one strong line repeated three times." },
+  { weight = 1, value = "Sparse and mechanical. Verses of two to four short lines, a chant-like chorus, long instrumental stretches." },
+]
+rhyme_guide = [
+  { weight = 0, value = "Rewrite stanzas to follow an ABABCD rhyming pattern when possible. Internal rhymes are encouraged." },
+  { weight = 1, value = "Don't enforce rhymes at the end of lines unless it's natural to do so, but internal rhymes are encouraged." },
+]

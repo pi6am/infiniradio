@@ -1,0 +1,18 @@
+name = "grunge-nineties"
+description = "1990s indie rock grunge"
+enabled = true
+tags = ["grunge"]
+
+[vars]
+style_guide = "An indie rock grunge track from the 1990s."
+
+[weighted]
+structure_guide = [
+  { weight = 3, value = "Fast paced and punchy. Each verse has five lines with a complementary chorus that progresses each time it repeats." },
+  { weight = 2, value = "Sludgy and dynamic. Verses of four to six lines, a loud-quiet-loud chorus, lines of medium length." },
+  { weight = 1, value = "Repetitive catchy hook. Each verse has four lines. The chorus has two lines repeated twice each." },
+]
+rhyme_guide = [
+  { weight = 2, value = "Don't enforce rhymes at the end of lines unless it's natural to do so, but internal rhymes are encouraged." },
+  { weight = 0, value = "Rewrite stanzas to follow an AABCDD rhyming pattern when possible. Use complex rhymes, internal rhymes are encouraged." },
+]

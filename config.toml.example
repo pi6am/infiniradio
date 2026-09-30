@@ -144,6 +144,14 @@ seed_dir = "prompts"
 # edit tags.toml to curate the list.
 seed_file = "tags.toml"
 
+[styles]
+# Song styles: named variable-override bundles the DJ picks with listener
+# votes (same weighted-bandit rule as prompts/workflows). A style carries a
+# general style_guide plus weighted structure/rhyme choices resolved by
+# seeded RNG per job. Imported on first boot; afterwards the database is
+# the source of truth (admin panel CRUD) — the prompts lifecycle.
+seed_dir = "styles"
+
 [naming]
 # Word-list directory for generated track titles: nouns.txt, adjectives.txt,
 # verbs.txt, verbs_third.txt, adverbs.txt — one word per line, '#' comments

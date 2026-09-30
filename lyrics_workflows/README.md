@@ -168,6 +168,53 @@ Full-pipeline local testing (sine-tone audio + scripted LLM):
 python -m infiniradio --mockaudio --mockllm
 ```
 
+## Styles (enforced variation)
+
+Unguided pipelines collapse to one genre and one song structure — the
+model's prior wins. Styles push back: a style is a **named bundle of
+workflow variables** the DJ picks per job (weighted by listener votes, the
+same bandit math as prompts), defined in `styles/*.toml` and managed in
+the admin panel after first boot (the prompts lifecycle):
+
+```toml
+[vars]                          # fixed overrides
+style_guide = "A dark industrial techno EDM track. Heavy beat and layered harmonics."
+
+[weighted]                      # one seeded-RNG choice per key, per job
+structure_guide = [
+  { weight = 3, value = "Repetitive catchy hook. Each verse has four lines. ..." },
+  { weight = 1, value = "Sparse and mechanical. Verses of two to four short lines, ..." },
+]
+rhyme_guide = [
+  { weight = 2, value = "Rewrite stanzas to follow an ABABCD rhyming pattern ..." },
+]
+```
+
+Conventions (enforced by taste, not code — any variable name works):
+
+- `style_guide`: general direction (genre/mood/energy). Several stages
+  consume it; it steers rather than dictates the final YuE2 style prompt.
+- `structure_guide`: the STRUCTURE of the lyrics — lines per section,
+  chorus repetition, line lengths. The main artificial-variation lever.
+- `rhyme_guide`: rhyme discipline; styles that favor repetition weight
+  stricter patterns higher (the semi-coupling).
+
+A workflow opts in with `styled = true` and declares fallbacks under
+`[vars]`; templates read the variables at top level
+(`{{ style_guide }}`, guarded by `{% if %}`). The engine layers them:
+workflow `[vars]` defaults < style overrides (resolved at enqueue, stored
+on the job, reproducible from its seed) < the seed title. Unstyled runs
+use the defaults — the old unguided behavior stays reachable.
+
+Audition a style without a server:
+
+```
+python -m infiniradio.lyrics --run jp-title-first --style jpop-anime --seed 7
+```
+
+(the CLI reads seed files; styles created in the admin panel live in the
+database and are not visible to it.)
+
 ## Future: sharing between variants
 
 `zh-title-first` is currently a full copy of `jp-title-first` with

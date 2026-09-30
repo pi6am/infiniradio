@@ -14,7 +14,7 @@
           <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>
           {% else %}new{% endif %}</td>
       <td>{% if j.workflow_id %}<a href="/admin/jobs/{{ j.id }}">{{ j.workflow_id }}</a>
-        <span class="pill">lyrics</span>{% else %}{{ j.prompt_name or '—' }}{% if j.style_override %} <span class="pill">custom style</span>{% endif %}{% endif %}</td>
+        <span class="pill">lyrics</span>{% if j.style_name %} <span class="pill ok">{{ j.style_name }}</span>{% endif %}{% else %}{{ j.prompt_name or '—' }}{% if j.style_override %} <span class="pill">custom style</span>{% endif %}{% endif %}</td>
       <td class="muted">{{ j.phase }}{% if j.stage_progress %} · {{ j.stage_progress }}{% endif %}</td>
       <td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td>
       <td class="muted">{{ j.seed or '—' }}</td>

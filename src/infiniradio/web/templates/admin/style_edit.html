@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}admin — style{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">{{ 'edit style' if s else 'new style' }}</h2>
+  {% if error %}<p style="color:var(--bad)">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ action }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+
+    <label>name</label>
+    <input type="text" name="name" value="{{ s.name if s else '' }}" required>
+
+    <label>description</label>
+    <input type="text" name="description" value="{{ s.description if s else '' }}"
+           placeholder="e.g. fast, energetic J-pop with a strong hook">
+
+    <label>tags (comma or space separated)</label>
+    <input type="text" name="tags" value="{{ s.tags | join(', ') if s and s.tags else '' }}"
+           placeholder="e.g. pop, electronic">
+
+    <label>definition — TOML with [vars] (fixed overrides) and [weighted]
+      (per-job seeded choices)</label>
+    <textarea name="definition" rows="14" style="font-family:monospace">{{ definition }}</textarea>
+    <p class="muted" style="margin-top:4px">style_guide: general direction (genre/mood/energy — not a
+      YuE2 style prompt). structure_guide: the structure of the lyrics (lines per section, chorus
+      repetition, line length, repetition). rhyme_guide: rhyme discipline. Any other variable name
+      works too — the workflow's templates decide what is consumed ([vars] in workflow.toml holds
+      the defaults).</p>
+
+    <label><input type="checkbox" name="enabled" value="on" {% if not s or s.enabled %}checked{% endif %}>
+      enabled (the DJ picks this style)</label>
+
+    <div style="margin-top:14px">
+      <button type="submit">save</button>
+      <a class="btn" href="/admin/styles">cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

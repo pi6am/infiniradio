@@ -14,6 +14,15 @@
       <option value="{{ w.name }}">{{ w.name }} — {{ w.description }}</option>
       {% endfor %}
     </select>
+    {% if styles %}
+    <label>style (direction + weighted structure/rhyme; “auto” uses the DJ's weighted pick)</label>
+    <select name="style_id">
+      <option value="0">auto</option>
+      {% for s in styles %}
+      <option value="{{ s.id }}">{{ s.name }} — {{ s.description }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
     <p class="muted" style="margin-top:4px">choosing a workflow ignores the prompt fields below</p>
     {% endif %}
 

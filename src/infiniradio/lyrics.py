@@ -65,7 +65,7 @@ RESERVED_VARS = frozenset({"title", "params", "tags", "failures", "failed",
                            "extract_failed", "attempt", "previous"})
 
 _WORKFLOW_KEYS = {"name", "description", "enabled", "tags", "seed_title",
-                  "params", "output", "stage"}
+                  "params", "vars", "styled", "output", "stage"}
 _STAGE_KEYS = {"id", "template", "saves", "block", "extract", "thread",
                "max_attempts", "feedback_template", "model", "temperature", "gate"}
 _GATE_KEYS = {"max_chars", "min_chars", "all_of", "any_of", "forbidden"}
@@ -145,6 +145,10 @@ class WorkflowSpec:
     stages: tuple[StageSpec, ...]
     output: OutputSpec
     env: jinja2.Environment
+    vars: dict[str, str] = field(default_factory=dict)  # default values for
+                                     # style-override variables; templates read
+                                     # them at top level ({{ style_guide }})
+    styled: bool = False             # the DJ picks a style for this workflow
 
 
 # ------------------------------------------------------------------ traces
@@ -346,6 +350,16 @@ def load_workflow(directory: Path) -> WorkflowSpec:
         raise WorkflowError(f"{where}: output.max_tags must be >= 1")
 
     env = _jinja_env(directory)
+    vars_defaults: dict[str, str] = {}
+    for key, value in (data.get("vars") or {}).items():
+        if not str(key).isidentifier() or not str(key)[0].islower():
+            raise WorkflowError(f"{where}: vars: {key!r} must be a lowercase identifier")
+        if str(key) in RESERVED_VARS:
+            raise WorkflowError(f"{where}: vars: {key!r} is reserved by the engine")
+        if not isinstance(value, str):
+            raise WorkflowError(f"{where}: vars: {key!r} must be a string "
+                                "(defaults for style overrides)")
+        vars_defaults[str(key)] = value
     for s in stages:
         try:
             env.get_template(s.template)
@@ -370,6 +384,11 @@ def load_workflow(directory: Path) -> WorkflowSpec:
         stages=stages,
         output=output,
         env=env,
+        # [vars]: defaults for style-override variables. Styles supply the
+        # values; the workflow supplies the fallbacks (e.g. an unstyled run
+        # keeps its natural rhyme discipline). Same naming rules as styles.
+        vars=vars_defaults,
+        styled=bool(data.get("styled", False)),
     )
 
 
@@ -571,7 +590,11 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
     """
     progress = progress or {}
     completed: list[str] = list(progress.get("completed") or [])
-    vars_: dict[str, Any] = dict(initial_vars or {})
+    # Workflow [vars] defaults first, then caller-supplied variables (seed
+    # title, style overrides), then any resumable state. The caller never
+    # needs to know which defaults a workflow declares.
+    vars_: dict[str, Any] = dict(getattr(spec, "vars", {}) or {})
+    vars_.update(initial_vars or {})
     vars_.update(progress.get("vars") or {})
     threads: dict[str, list[Message]] = {
         key: [Message(role=r, content=c) for r, c in msgs]
@@ -775,6 +798,10 @@ def main() -> None:
     ap.add_argument("--mock", action="store_true",
                     help="use the scripted mock LLM (no endpoint needed)")
     ap.add_argument("--seed", type=int, default=None, help="seed for the title generator")
+    ap.add_argument("--style", metavar="NAME", default=None,
+                    help="run with a style (from styles/*.toml seeds): fixed + weighted "
+                         "variables resolved from --seed, passed to the workflow as "
+                         "template variables")
     ap.add_argument("--stage", metavar="STAGE_ID",
                     help="with --run: stop after this stage (debugging aid)")
     ap.add_argument("--full", action="store_true", help="print full texts, not truncated")
@@ -802,6 +829,21 @@ def main() -> None:
     rng = _random.Random(args.seed)
     title = args.title or naming.title(rng)
 
+    # A style (seed-file view — the station reads styles from the database):
+    # fixed vars + one seeded weighted choice per key, merged over the
+    # workflow's [vars] defaults.
+    style_overrides: dict[str, str] = {}
+    if args.style:
+        from . import styles as styles_mod
+        try:
+            style = styles_mod.load_seed_style(cfg, args.style)
+        except styles_mod.StyleError as exc:
+            raise SystemExit(f"error: {exc}")
+        style_overrides = styles_mod.resolve(style.vars, style.weighted, rng.getrandbits(31))
+        print(f"style {style.name!r} resolved with seed {args.seed}:")
+        for key, value in style_overrides.items():
+            print(f"  {key} = {value[:80]}{'…' if len(value) > 80 else ''}")
+
     if args.dry_run:
         from . import library as library_mod
         llm_tags, _static = library_mod.load_tag_seeds(cfg)
@@ -809,7 +851,9 @@ def main() -> None:
         produced = {s.saves for s in spec.stages if s.saves} | {
             k for s in spec.stages for k, _ in s.extract}
         placeholders = {name: f"⟨{name}: output of an earlier stage⟩" for name in produced}
-        vars_: dict[str, Any] = {"title": title, **placeholders}
+        vars_: dict[str, Any] = {"title": title, **spec.vars, **style_overrides,
+                                 **placeholders}
+        # (the engine layers spec.vars the same way at run time)
         fake_failures = [Failure(code, "check", f"fake {code} for template checking")
                          for code in FAILURE_CODES]
         for stage in spec.stages:
@@ -845,7 +889,10 @@ def main() -> None:
                 _print_trunc("reply", trace.response_text, limit)
 
         try:
-            initial = {"title": title} if spec.seed_title else {}
+            # The engine layers workflow [vars] defaults under these.
+            initial: dict[str, Any] = dict(style_overrides)
+            if spec.seed_title:
+                initial["title"] = title
             result = await run_workflow(
                 client, spec, initial_vars=initial,
                 tag_vocabulary=llm_tags or ["pop", "rock", "male vocal", "female vocal"],

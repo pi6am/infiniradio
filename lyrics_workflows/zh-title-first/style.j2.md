@@ -17,3 +17,11 @@ Style prompt:
 ```
 {prompt here}
 ```
+{% if style_guide %}
+
+{{ style_guide }}
+{% endif %}
+{% if structure_guide %}
+
+{{ structure_guide }}
+{% endif %}

@@ -38,6 +38,7 @@ import logging
 import math
 import random
 from datetime import timedelta
+from typing import Any
 
 from . import janitor, library, lyrics, naming
 from .config import Config, runtime_get
@@ -160,6 +161,32 @@ def tag_air_stats(db: DB, tag_id: int) -> dict:
             "avg_score": sum(scores) / len(scores) if scores else 0.0}
 
 
+def style_air_stats(db: DB, style_id: int) -> dict:
+    """Per-track verdicts for a style's AIRED tracks — the steering signal
+    that lets listener votes arbitrate between styles."""
+    rows = db.query(
+        "SELECT vote_up, vote_down FROM tracks"
+        " WHERE style_id = ? AND play_count > 0", (style_id,))
+    scores = [wilson_score(r["vote_up"], r["vote_down"]) for r in rows]
+    return {"aired": len(scores),
+            "avg_score": sum(scores) / len(scores) if scores else 0.0}
+
+
+def style_weight(db: DB, cfg, style_id: int) -> float:
+    base = runtime_get(cfg, db, "dj.style_base_weight")
+    return base + style_air_stats(db, style_id)["avg_score"]
+
+
+def pick_style(rt) -> dict | None:
+    """Soft diversity-weighted style choice, same math as prompts and
+    workflows: weight = base + avg Wilson of aired tracks."""
+    styles = rt.db.query("SELECT * FROM styles WHERE enabled = 1")
+    if not styles:
+        return None
+    weights = [style_weight(rt.db, rt.cfg, s["id"]) for s in styles]
+    return random.choices(styles, weights=weights, k=1)[0]
+
+
 def pick_prompt(db: DB, cfg, exclude_prompt_id: int | None = None) -> dict | None:
     """Soft diversity-weighted prompt choice (weight ~ base + avg score)."""
     prompts = db.query("SELECT * FROM prompts WHERE enabled = 1")
@@ -216,20 +243,41 @@ def variation_parent(db: DB, cfg: Config) -> dict | None:
 
 def enqueue_job(db: DB, *, prompt_id: int | None = None, parent_track_id: int | None = None,
                 style_override: str | None = None, seed: int | None = None,
-                workflow_id: str | None = None) -> int:
+                workflow_id: str | None = None,
+                style_id: int | None = None) -> int:
     """Queue a generation job. Workflow jobs enter the 'lyrics' phase first
     (theme title stashed in progress); everything else goes straight to
-    'render'."""
+    'render'.
+
+    With style_id, the style's fixed vars and weighted choices are resolved
+    right here with the job's seed and stashed in progress — the resolution
+    is then reproducible from the job row alone, and a later style edit
+    cannot silently change what an already-commissioned job will render.
+    """
+    from . import styles as styles_mod
+
     phase = "lyrics" if workflow_id else "render"
-    progress = {}
+    progress: dict[str, Any] = {}
     if workflow_id:
         progress["theme_title"] = naming.unique_title(db)
+    if style_id is not None:
+        row = db.one("SELECT * FROM styles WHERE id = ?", (style_id,))
+        if row is None:
+            raise ValueError(f"style {style_id!r} does not exist")
+        if seed is None:
+            seed = _random_seed()
+        progress["overrides"] = styles_mod.resolve(
+            json.loads(row["vars_json"] or "{}"),
+            json.loads(row["weighted_json"] or "{}"), seed)
+        db.execute(
+            "UPDATE styles SET times_used = times_used + 1, last_used_at = ? WHERE id = ?",
+            (iso(utcnow()), style_id))
     job_id = db.execute(
         "INSERT INTO generation_jobs (prompt_id, parent_track_id, style_override, seed,"
-        " workflow_id, phase, progress, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
-        (prompt_id, parent_track_id, style_override, seed, workflow_id, phase,
-         json.dumps(progress), iso(utcnow())),
+        " workflow_id, style_id, phase, progress, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+        (prompt_id, parent_track_id, style_override, seed, workflow_id, style_id, phase,
+         json.dumps(progress, ensure_ascii=False), iso(utcnow())),
     )
     if prompt_id:
         db.execute(
@@ -356,20 +404,34 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
 
     progress = _job_progress(job)
     theme_title = progress.get("theme_title") or naming.unique_title(db)
-    initial = {"title": theme_title} if spec.seed_title else {}
+    overrides = {k: v for k, v in (progress.get("overrides") or {}).items()
+                 if k not in lyrics.RESERVED_VARS}
+    # The engine merges workflow [vars] defaults under these; style
+    # overrides win, and the seed title is reserved.
+    initial: dict[str, Any] = dict(overrides)
+    if spec.seed_title:
+        initial["title"] = theme_title
 
     def guard() -> bool:
         row = db.one("SELECT status FROM generation_jobs WHERE id = ?", (job["id"],))
         return row is not None and row["status"] == "running"
 
+    def with_job_state(snapshot: dict) -> dict:
+        """Engine snapshots carry only workflow state; re-attach the
+        commission-time facts (theme title, resolved style overrides) so
+        they survive every progress write."""
+        snap = dict(snapshot)
+        snap["theme_title"] = theme_title
+        if overrides:
+            snap["overrides"] = overrides
+        return snap
+
     def on_stage(_stage_id: str, snapshot: dict) -> None:
         # Persist stage completions as they happen: the jobs page shows live
         # progress, and a failed run's retry resumes from the last completed
         # stage instead of re-paying for the whole pipeline.
-        snap = dict(snapshot)
-        snap["theme_title"] = theme_title
         db.execute("UPDATE generation_jobs SET progress = ? WHERE id = ?",
-                   (json.dumps(snap, ensure_ascii=False), job["id"]))
+                   (json.dumps(with_job_state(snapshot), ensure_ascii=False), job["id"]))
 
     if progress.get("completed"):
         log.info("job %s: lyrics via workflow %s (theme %r, resuming at stage %s)",
@@ -388,7 +450,7 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
         if not result.ok:
             _fail_job(db, job["id"], result.error)
             return
-        final_progress = result.progress
+        final_progress = with_job_state(result.progress)
         final_progress["outputs"] = {
             "title": result.title or "",
             "theme_title": theme_title,
@@ -474,7 +536,7 @@ async def job_runner(rt) -> None:
                 track_id = library.create_track(
                     db, cfg,
                     prompt_id=job["prompt_id"], parent_track_id=job["parent_track_id"],
-                    workflow_id=job["workflow_id"],
+                    workflow_id=job["workflow_id"], style_id=job["style_id"],
                     title=outputs.get("title") or "",
                     theme_title=outputs.get("theme_title") or "",
                     style_text=req.style, lyrics_snapshot=req.lyrics,
@@ -580,10 +642,13 @@ def _commission_one(rt, eligible_n: int, runway_s: float) -> bool:
     if picked is not None:
         kind, obj = picked
         if kind == "workflow":
-            enqueue_job(rt.db, workflow_id=obj.name)
-            log.info("commissioned new track via lyrics workflow %r (runway "
-                     "%.1f min over %d eligible tracks)", obj.name, runway_s / 60.0,
-                     eligible_n)
+            style = pick_style(rt) if obj.styled else None
+            enqueue_job(rt.db, workflow_id=obj.name,
+                        style_id=style["id"] if style else None)
+            log.info("commissioned new track via lyrics workflow %r%s (runway "
+                     "%.1f min over %d eligible tracks)", obj.name,
+                     f" in style {style['name']!r}" if style else "",
+                     runway_s / 60.0, eligible_n)
         else:
             enqueue_job(rt.db, prompt_id=obj["id"])
             log.info("commissioned new track with prompt %r (runway %.1f min over "

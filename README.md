@@ -34,6 +34,11 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
   missing format markers…), the lyrics pipeline overlaps audio rendering
   (two GPUs) or serializes onto one, every LLM exchange is logged for
   debugging, and listener votes arbitrate between workflow variants.
+- **Styles (enforced variation)** — unguided pipelines collapse to one
+  genre and structure; styles are vote-steered bundles of workflow
+  variables (`styles/*.toml`, admin-managed): a general `style_guide` plus
+  weighted `structure_guide`/`rhyme_guide` choices resolved per job by
+  seeded RNG. The DJ picks styles with the same bandit math as prompts.
 - **Tags** — tracks carry tags (static per prompt/workflow plus LLM-picked),
   with per-tag Wilson aggregation in the admin panel for cross-cutting
   "what actually works" analysis.
@@ -171,6 +176,7 @@ the configuration against generated songs. Thresholds live under
 config.toml          settings (copy from config.toml.example)
 workflow/            ComfyUI workflow (API format) used as submit template
 prompts/             seed prompt library (TOML), imported on first boot
+styles/              seed song styles (TOML), imported on first boot
 lyrics_workflows/    LLM lyrics pipelines (workflow.toml + Jinja templates)
 sidecar/             cleanup service for the ComfyUI machine
 data/                runtime: SQLite DB, music/<id>/{original, playout.m4a, score.abc}, hls/

@@ -182,6 +182,33 @@ MIGRATIONS: dict[int, str] = {
     -- not pickable until the seed file adopts them.
     ALTER TABLE tags ADD COLUMN llm_pickable INTEGER NOT NULL DEFAULT 0;
     """,
+    8: """
+    -- Song styles: named variable-override bundles the DJ picks with the
+    -- same weighted-bandit rule as prompts/workflows (votes steer styles).
+    -- vars_json/weighted_json hold the [vars] fixed overrides and the
+    -- [weighted] choices resolved by seeded RNG at commission time; the
+    -- resolved values travel per-job in progress JSON. Prompts lifecycle:
+    -- styles/*.toml seeds imported on first boot, DB source of truth after.
+    CREATE TABLE styles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL DEFAULT '',
+      vars_json TEXT NOT NULL DEFAULT '{}',
+      weighted_json TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      times_used INTEGER NOT NULL DEFAULT 0,
+      last_used_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE style_tags (
+      style_id INTEGER NOT NULL REFERENCES styles(id) ON DELETE CASCADE,
+      tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+      PRIMARY KEY (style_id, tag_id)
+    );
+    ALTER TABLE generation_jobs ADD COLUMN style_id INTEGER REFERENCES styles(id);
+    ALTER TABLE tracks ADD COLUMN style_id INTEGER REFERENCES styles(id);
+    CREATE INDEX idx_tracks_style ON tracks(style_id);
+    """,
 }
 
 

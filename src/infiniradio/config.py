@@ -130,6 +130,14 @@ DEFAULTS: dict[str, Any] = {
         # at every startup — edit the file to curate the list.
         "seed_file": "tags.toml",
     },
+    "styles": {
+        # Style seeds (see styles/): named variable-override bundles the DJ
+        # picks with listener votes (style_guide direction + weighted
+        # structure/rhyme choices). Imported on first boot; afterwards the
+        # database is the source of truth (admin panel CRUD) — the prompts
+        # lifecycle, not the tags one.
+        "seed_dir": "styles",
+    },
     "prompts": {
         "seed_dir": "prompts",
     },
@@ -147,6 +155,9 @@ RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
                               "Every prompt's selection weight is this plus the average Wilson score of "
                               "its aired tracks — gentle quality steering with a diversity floor (higher "
                               "= more uniform selection)"),
+    "dj.style_base_weight": (0.5, float, "Style selection base weight",
+                             "Same rule for song styles (lyrics workflows): weight = this plus the "
+                             "average Wilson score of the style's aired tracks"),
     "dj.max_queued_jobs": (1, int, "Max queued generation jobs",
                            "Commission at most this many jobs ahead of the one running; keeps decisions "
                            "just-in-time (latest prompts and votes)"),

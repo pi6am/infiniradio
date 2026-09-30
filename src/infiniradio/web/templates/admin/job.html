@@ -13,6 +13,7 @@
     <tr><th>workflow</th><td>{{ j.workflow_id }}{% if workflow %} — {{ workflow.description }}{% endif %}</td></tr>
     <tr><th>phase</th><td>{{ j.phase }}{% if stage_progress %} ({{ stage_progress }}){% endif %}</td></tr>
     {% endif %}
+    {% if j.style_name %}<tr><th>style</th><td>{{ j.style_name }}</td></tr>{% endif %}
     {% if j.prompt_id %}<tr><th>prompt</th><td>{{ j.prompt_name or '—' }}</td></tr>{% endif %}
     <tr><th>track</th><td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td></tr>
     <tr><th>seed</th><td class="muted">{{ j.seed or '—' }}</td></tr>

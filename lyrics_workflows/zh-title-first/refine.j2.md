@@ -4,5 +4,17 @@ Rewrite the words of this song slightly to have a better internal rhythm. Focus 
 ```
 
 It's okay to change the wording slightly to improve the rhythm of the lines, but don't change the overall meaning. Remove excess words and try to make the song more sparse and evocative. Avoid unnecessary verbosity. Don't add extra rhymes at the end of lines, but internal rhymes are okay.
+{% if style_guide %}
+
+{{ style_guide }}
+{% endif %}
+{% if structure_guide %}
+
+{{ structure_guide }}
+{% endif %}
+{% if rhyme_guide %}
+
+{{ rhyme_guide }}
+{% endif %}
 
 Reply with only the song — section headers and lyrics, nothing else. Do not wrap it in a code block, and do not add any commentary before or after.

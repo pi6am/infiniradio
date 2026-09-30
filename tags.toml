@@ -17,7 +17,7 @@ llm_tags = [
   "ambient", "synthwave", "alt-rock", "indie", "metal", "punk", "hard-rock",
   "psychedelic", "grunge", "blues", "soul", "funk", "ska", "reggae",
   "folk", "latin", "afrobeats", "world", "lo-fi", "acoustic", "chill",
-  "game", "chiptune", "industrial", "cinematic",
+  "chiptune", "industrial", "soundtrack",
   # vocal types
   "male vocal", "female vocal",
 ]
