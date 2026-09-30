@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from typing import Any
 
 import httpx
@@ -30,6 +31,14 @@ log = logging.getLogger(__name__)
 
 BACKOFF_BASE_S = 2.0
 BACKOFF_CAP_S = 30.0
+
+# Health pings (/models for the admin dashboard) are not generation calls:
+# a down endpoint must never stall the page for the full generation
+# timeout. Short deadline, and the verdict (including failures) is cached
+# for a TTL so repeated page loads read the last result instead of
+# re-probing.
+STATUS_TIMEOUT_S = 4.0
+STATUS_CACHE_TTL_S = 30.0
 
 
 class OpenAICompatClient(LLMClient):
@@ -53,6 +62,7 @@ class OpenAICompatClient(LLMClient):
             headers=headers,
             timeout=httpx.Timeout(connect=10.0, read=timeout_s, write=60.0, pool=10.0),
         )
+        self._status_cache: tuple[float, dict[str, Any]] | None = None
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -110,10 +120,19 @@ class OpenAICompatClient(LLMClient):
                      usage={k: int(v) for k, v in usage.items() if isinstance(v, (int, float))})
 
     async def status(self) -> dict[str, Any]:
+        """Health info for the admin dashboard, cached for STATUS_CACHE_TTL_S
+        (failures included): the page reads the last verdict instead of
+        waiting on a probe, and the probe itself carries a short deadline —
+        a down endpoint costs at most one STATUS_TIMEOUT_S wait per TTL
+        window, not the generation timeout."""
+        now = time.monotonic()
+        if self._status_cache is not None and now - self._status_cache[0] < STATUS_CACHE_TTL_S:
+            return dict(self._status_cache[1])
         out: dict[str, Any] = {"backend": self.name, "url": self.base_url,
                                "model": self.model}
         try:
-            r = await self._client.get("/models")
+            r = await self._client.get("/models",
+                                       timeout=httpx.Timeout(STATUS_TIMEOUT_S))
             r.raise_for_status()
             models = [m.get("id") for m in r.json().get("data", []) if isinstance(m, dict)]
             out["ok"] = True
@@ -122,8 +141,9 @@ class OpenAICompatClient(LLMClient):
                 out["warning"] = f"configured model {self.model!r} not in /models list"
         except Exception as exc:
             out["ok"] = False
-            out["error"] = str(exc)
-        return out
+            out["error"] = str(exc)[:300]
+        self._status_cache = (now, out)
+        return dict(out)
 
 
 def _retry_after(resp: httpx.Response) -> float | None:
