@@ -13,12 +13,13 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import dj, library
+from . import dj, library, llm as llm_mod
 from .config import Config, load_config
 from .db import DB
 from .generator.base import Generator
 from .generator.comfyui import ComfyUIGenerator
 from .generator.mock import MockGenerator
+from .llm import LLMClient, make_llm_client
 from .util import utcnow
 from .web import auth
 from .web.routes_admin import router as admin_router
@@ -34,6 +35,9 @@ class Runtime:
     cfg: Config
     db: DB
     generator: Generator | None
+    llm: LLMClient | None = None
+    workflows: dict = field(default_factory=dict)
+    gen_lock: object | None = None    # asyncio.Lock when lyrics.serialize_with_render
     feeder: object | None = None
     telemetry: object | None = None
     started: datetime = field(default_factory=utcnow)
@@ -77,6 +81,36 @@ def make_generator(cfg: Config, backend: str) -> Generator | None:
     if backend == "mock":
         return MockGenerator(cfg)
     return None  # 'off'
+
+
+def resolve_llm(cfg: Config, mockllm: bool) -> str:
+    """Effective LLM backend name: 'openai' | ... | 'mock' | 'off'.
+
+    Pure config validation (no client constructed) so a typo in [llm] fails
+    fast at create_app with one clean error line, not a traceback at the
+    first commissioned lyrics job. The client itself is made in lifespan.
+    """
+    if mockllm:
+        return "mock"
+    if not bool(cfg.get("llm.enabled", False)):
+        return "off"
+    backend = str(cfg.get("llm.backend", "openai") or "openai").strip().lower()
+    if backend == "mock":
+        raise StartupError(
+            '[llm] backend = "mock" is testing-only and cannot be set in '
+            "config; start the server with --mockllm for scripted LLM responses"
+        )
+    if backend not in llm_mod.BACKENDS:
+        raise StartupError(
+            f"unknown [llm] backend {backend!r} (expected "
+            + " or ".join(map(repr, llm_mod.BACKENDS)) + ")"
+        )
+    if not str(cfg.get("llm.base_url", "") or "").strip():
+        raise StartupError("[llm] enabled but base_url is empty")
+    if not str(cfg.get("llm.model", "") or "").strip():
+        log.warning("[llm] no model set — endpoints that require an explicit "
+                    "model name will reject requests")
+    return backend
 
 
 def _check_playout_viable(cfg: Config, backend: str) -> None:
@@ -154,16 +188,24 @@ async def _plain_response(send, status: int, body: bytes) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
-def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -> FastAPI:
+def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
+               mockllm: bool = False) -> FastAPI:
     cfg = load_config(config_path)
 
     # Validate before uvicorn starts so misconfiguration ends in a single
     # clean error line and a non-zero exit code, not a lifespan traceback.
     try:
         backend = resolve_backend(cfg, mockaudio)
+        llm_backend = resolve_llm(cfg, mockllm)
         _check_playout_viable(cfg, backend)
         from . import naming
         naming.load_lists(cfg.path("naming.words_dir"))
+        workflows = {}
+        if llm_backend != "off":
+            # WorkflowError is a RuntimeError: a malformed workflow fails
+            # startup with its message via the handler below.
+            from .lyrics import load_workflows
+            workflows = load_workflows(cfg)
         from .util import lock_data_dir
         lock_data_dir(cfg.path("library.data_dir"))
     except (StartupError, RuntimeError) as exc:
@@ -177,17 +219,22 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
         (data_dir / "hls").mkdir(parents=True, exist_ok=True)
         db = DB(data_dir / "infiniradio.db")
         library.import_prompts(db, cfg)
+        library.seed_tags(db, cfg)
         # Nothing runs yet: fail jobs/tracks orphaned by a previous crash
         # (a 'running' job is never re-claimed, and its placeholder track
         # would count as "generating" forever).
         dj.reconcile_stale_jobs(db)
 
         generator = make_generator(cfg, backend)
+        llm_client = make_llm_client(cfg, mockllm=mockllm) if llm_backend != "off" else None
         app.state.sessions = auth.Sessions(auth.get_server_secret(db, cfg))
 
         from .streamer.feeder import Feeder  # deferred import (avoids cycles)
         from . import telemetry as telemetry_mod
-        rt = Runtime(cfg=cfg, db=db, generator=generator)
+        rt = Runtime(cfg=cfg, db=db, generator=generator, llm=llm_client,
+                     workflows=workflows,
+                     gen_lock=asyncio.Lock()
+                     if bool(cfg.get("lyrics.serialize_with_render", False)) else None)
         rt.feeder = Feeder(rt)
         rt.telemetry = telemetry_mod.Telemetry(db)
         app.state.rt = rt
@@ -198,8 +245,11 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
         if generator is not None:
             tasks.append(asyncio.create_task(dj.job_runner(rt)))
             tasks.append(asyncio.create_task(dj.commission_loop(rt)))
+        if llm_client is not None:
+            tasks.append(asyncio.create_task(dj.lyrics_runner(rt)))
 
-        log.info("infiniradio on air: backend=%s data=%s", backend, data_dir)
+        log.info("infiniradio on air: backend=%s llm=%s workflows=%d data=%s",
+                 backend, llm_backend, len(workflows), data_dir)
         try:
             yield
         finally:
@@ -213,6 +263,8 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False) -
             await rt.feeder.stop()
             if isinstance(generator, ComfyUIGenerator):
                 await generator.close()
+            if llm_client is not None:
+                await llm_client.close()
             db.conn.close()
 
     app = FastAPI(title="infiniradio", lifespan=lifespan,

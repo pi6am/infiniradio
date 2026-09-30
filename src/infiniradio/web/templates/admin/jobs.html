@@ -5,15 +5,17 @@
 <div class="card">
   <h2 style="margin-top:0">generation jobs</h2>
   <table>
-    <tr><th>id</th><th>kind</th><th>prompt</th><th>track</th><th>seed</th>
+    <tr><th>id</th><th>kind</th><th>generator</th><th>phase</th><th>track</th><th>seed</th>
         <th>status</th><th>error</th><th>created</th><th>finished</th><th></th></tr>
     {% for j in jobs %}
     <tr>
-      <td>{{ j.id }}</td>
+      <td><a href="/admin/jobs/{{ j.id }}">{{ j.id }}</a></td>
       <td>{% if j.parent_track_id %}variation of
           <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>
           {% else %}new{% endif %}</td>
-      <td>{{ j.prompt_name or '—' }}{% if j.style_override %} <span class="pill">custom style</span>{% endif %}</td>
+      <td>{% if j.workflow_id %}<a href="/admin/jobs/{{ j.id }}">{{ j.workflow_id }}</a>
+        <span class="pill">lyrics</span>{% else %}{{ j.prompt_name or '—' }}{% if j.style_override %} <span class="pill">custom style</span>{% endif %}{% endif %}</td>
+      <td class="muted">{{ j.phase }}{% if j.stage_progress %} · {{ j.stage_progress }}{% endif %}</td>
       <td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td>
       <td class="muted">{{ j.seed or '—' }}</td>
       <td><span class="pill {% if j.status == 'done' %}ok{% elif j.status in ('failed', 'cancelled') %}err{% endif %}">{{ j.status }}</span></td>
@@ -34,8 +36,10 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="10" class="muted">no jobs yet</td></tr>
+    <tr><td colspan="11" class="muted">no jobs yet</td></tr>
     {% endfor %}
   </table>
+  <p class="muted">retry resumes: a failed lyrics phase restarts from its last completed stage;
+    a failed render reuses the workflow's saved outputs.</p>
 </div>
 {% endblock %}

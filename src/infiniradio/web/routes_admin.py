@@ -53,7 +53,13 @@ def _track_with_meta(db, row: dict) -> dict:
     prompt = db.one("SELECT name FROM prompts WHERE id = ?", (row["prompt_id"],)) \
         if row["prompt_id"] else None
     out = dict(row)
-    out["prompt_name"] = prompt["name"] if prompt else ("custom" if row["style_text"] else "?")
+    out["prompt_name"] = prompt["name"] if prompt else (
+        "custom" if row["style_text"] else "?")
+    # Display subtitle (library/aired tables): theme title for workflow
+    # tracks, else prompt name, else the workflow slug.
+    out["subtitle"] = row.get("theme_title") or out["prompt_name"] \
+        or row.get("workflow_id") or "?"
+    out["tags"] = library.track_tags(db, row["id"])
     out["score"] = round(wilson_score(row["vote_up"], row["vote_down"]), 3)
     out["duration_fmt"] = fmt_duration(row["duration_s"] or 0)
     out["size_fmt"] = human_bytes(row["size_bytes"])
@@ -126,6 +132,7 @@ async def dashboard(request: Request):
         " AS playtime_s FROM tracks"
     )
     gen_status = await rt.generator.status() if rt.generator else {"backend": "off", "ok": None}
+    llm_status = await rt.llm.status() if rt.llm else {"backend": "off", "ok": None}
     jobs = db.query("SELECT j.*, p.name AS prompt_name, pt.title AS parent_title"
                     " FROM generation_jobs j"
                     " LEFT JOIN prompts p ON p.id = j.prompt_id"
@@ -145,14 +152,14 @@ async def dashboard(request: Request):
     np = now_playing(db, cfg, "admin")
     queue = db.query(
         "SELECT q.id AS qid, q.queued_at, t.id AS track_id, t.title, t.duration_s,"
-        " p.name AS prompt_name FROM play_queue q"
+        " t.theme_title, t.workflow_id, p.name AS prompt_name FROM play_queue q"
         " JOIN tracks t ON t.id = q.track_id"
         " LEFT JOIN prompts p ON p.id = t.prompt_id ORDER BY q.id"
     )
     return request.app.state.templates.TemplateResponse(
         request, "admin/dashboard.html",
         _ctx(request,
-             np=np, quota=quota, stats=stats, gen=gen_status, jobs=jobs,
+             np=np, quota=quota, stats=stats, gen=gen_status, llm=llm_status, jobs=jobs,
              feeder_track=feeder_track, queue=queue,
              gen_manual_paused=bool(db.get_setting("generation_paused")),
              gen_paused=gen_paused, gen_reason=gen_reason,
@@ -525,9 +532,33 @@ async def prompts_page(request: Request):
         p["weight"] = round(dj.prompt_weight(rt.db, rt.cfg, p["id"]), 3)
         p["avg_score"] = round(stats["avg_score"], 3)
         p["aired"] = stats["aired"]
+        p["tags"] = library.prompt_tags(rt.db, p["id"])
         prompts.append(p)
+    tags = []
+    for t in rt.db.query("SELECT id, name FROM tags ORDER BY name"):
+        stats = dj.tag_air_stats(rt.db, t["id"])
+        tracks = rt.db.one(
+            "SELECT COUNT(*) AS n FROM track_tags WHERE tag_id = ?", (t["id"],))["n"]
+        tags.append({"name": t["name"], "aired": stats["aired"],
+                     "avg_score": round(stats["avg_score"], 3), "tracks": tracks})
+    workflows = []
+    for w in getattr(rt, "workflows", {}).values():
+        stats = dj.workflow_air_stats(rt.db, w.name)
+        tracks = rt.db.one(
+            "SELECT COUNT(*) AS n FROM tracks WHERE workflow_id = ? AND status != 'deleted'",
+            (w.name,))["n"]
+        weight = (dj.workflow_weight(rt.db, rt.cfg, w.name)
+                  if rt.llm is not None and w.enabled else None)
+        workflows.append({"name": w.name, "description": w.description,
+                          "enabled": w.enabled, "stages": len(w.stages),
+                          "tags": list(w.static_tags), "tracks": tracks,
+                          "aired": stats["aired"],
+                          "avg_score": round(stats["avg_score"], 3),
+                          "weight": round(weight, 3) if weight is not None else None})
     return request.app.state.templates.TemplateResponse(
-        request, "admin/prompts.html", _ctx(request, prompts=prompts))
+        request, "admin/prompts.html",
+        _ctx(request, prompts=prompts, tags=tags, workflows=workflows,
+             has_llm=rt.llm is not None))
 
 
 def _prompt_form(request: Request, prompt_id: int | None):
@@ -675,8 +706,65 @@ async def jobs_page(request: Request):
         " LEFT JOIN prompts p ON p.id = j.prompt_id"
         " LEFT JOIN tracks pt ON pt.id = j.parent_track_id"
         " ORDER BY j.id DESC LIMIT 200")
+    for j in jobs:
+        j["stage_progress"] = _stage_progress(rt, j)
     return request.app.state.templates.TemplateResponse(
         request, "admin/jobs.html", _ctx(request, jobs=jobs))
+
+
+def _stage_progress(rt, job: dict) -> str:
+    """'4/7 · style' — completed/total stages of a job's lyrics phase, read
+    from the live progress column (persisted as each stage completes)."""
+    import json as _json
+
+    if job.get("phase") != "lyrics" or not job.get("workflow_id"):
+        return ""
+    try:
+        progress = _json.loads(job.get("progress") or "{}")
+    except _json.JSONDecodeError:
+        return ""
+    completed = progress.get("completed") or []
+    spec = getattr(rt, "workflows", {}).get(job["workflow_id"])
+    total = len(spec.stages) if spec else None
+    label = f"{len(completed)}/{total}" if total else f"{len(completed)} stages done"
+    return label + (f" · {completed[-1]}" if completed else "")
+
+
+@router.get("/jobs/{job_id}", response_class=HTMLResponse)
+async def job_detail(request: Request, job_id: int):
+    """Full job view: the workflow's per-stage LLM trace from job_stage_log."""
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    job = rt.db.one(
+        "SELECT j.*, p.name AS prompt_name, pt.title AS parent_title"
+        " FROM generation_jobs j"
+        " LEFT JOIN prompts p ON p.id = j.prompt_id"
+        " LEFT JOIN tracks pt ON pt.id = j.parent_track_id"
+        " WHERE j.id = ?", (job_id,))
+    if not job:
+        return _login_redirect()
+    stages = rt.db.query(
+        "SELECT * FROM job_stage_log WHERE job_id = ? ORDER BY id", (job_id,))
+    import json as _json
+
+    for s in stages:
+        for dst, src in (("vars", "vars_json"), ("gate", "gate_json"), ("usage", "usage_json")):
+            try:
+                s[dst] = _json.loads(s[src] or ("{}" if dst != "gate" else "[]"))
+            except _json.JSONDecodeError:
+                s[dst] = {} if dst != "gate" else []
+    outputs = {}
+    if job.get("progress"):
+        try:
+            outputs = (_json.loads(job["progress"]) or {}).get("outputs") or {}
+        except _json.JSONDecodeError:
+            outputs = {}
+    workflow = rt.workflows.get(job["workflow_id"]) if job.get("workflow_id") else None
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/job.html",
+        _ctx(request, j=job, stages=stages, outputs=outputs, workflow=workflow,
+             stage_progress=_stage_progress(rt, job)))
 
 
 @router.post("/jobs/{job_id}/retry")
@@ -712,8 +800,10 @@ async def job_cancel(request: Request, job_id: int, csrf: str = Form("")):
         rt.db.execute("UPDATE generation_jobs SET status = 'cancelled',"
                       " finished_at = ? WHERE id = ?", (iso(utcnow()), job_id))
     elif job and job["status"] == "running":
-        if rt.generator:
+        if rt.generator and job.get("phase") != "lyrics":
             await rt.generator.interrupt()
+        # A lyrics-phase job needs no backend interrupt; its runner notices
+        # the status change between stages/attempts and stops.
         rt.db.execute("UPDATE generation_jobs SET status = 'cancelled',"
                       " finished_at = ? WHERE id = ?", (iso(utcnow()), job_id))
         # The placeholder track would otherwise count as "generating"
@@ -744,19 +834,31 @@ async def generate_form(request: Request):
         return _login_redirect()
     rt = request.app.state.rt
     prompts = rt.db.query("SELECT * FROM prompts WHERE enabled = 1 ORDER BY name")
+    workflows = [w for w in getattr(rt, "workflows", {}).values() if w.enabled]
     return request.app.state.templates.TemplateResponse(
-        request, "admin/generate.html", _ctx(request, prompts=prompts))
+        request, "admin/generate.html",
+        _ctx(request, prompts=prompts, workflows=workflows,
+             has_llm=rt.llm is not None))
 
 
 @router.post("/generate")
 async def generate_submit(request: Request, prompt_id: int = Form(0),
+                          workflow_id: str = Form(""),
                           custom_name: str = Form(""), custom_style: str = Form(""),
                           custom_song: str = Form("[Intro]\n\n[Instrumental]\n\n[Outro]"),
                           csrf: str = Form("")):
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    if prompt_id:
+    workflow = None
+    if workflow_id.strip():
+        workflow = getattr(rt, "workflows", {}).get(workflow_id.strip())
+        if workflow is None or rt.llm is None:
+            return PlainTextResponse("no such lyrics workflow (or LLM disabled)",
+                                     status_code=400)
+    if workflow is not None:
+        dj.enqueue_job(rt.db, workflow_id=workflow.name)
+    elif prompt_id:
         prompt = rt.db.one("SELECT id FROM prompts WHERE id = ?", (prompt_id,))
         if prompt:
             dj.enqueue_job(rt.db, prompt_id=prompt_id)

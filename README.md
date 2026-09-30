@@ -25,6 +25,18 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
   base plus the average Wilson score of its aired tracks: quality steers generation
   gently, and the per-track average prevents a prolific style from feeding back
   into dominance.
+- **LLM-written songs (optional)** — with any OpenAI-compatible endpoint
+  configured, multi-stage lyrics workflows (data-driven: a `workflow.toml`
+  plus Jinja prompt templates per workflow directory, see
+  `lyrics_workflows/README.md`) write real lyrics — random title →
+  brainstorm → foreign-language draft → English translation → style prompt →
+  rhythm refinement. Stages have gates and feedback retries (too long,
+  missing format markers…), the lyrics pipeline overlaps audio rendering
+  (two GPUs) or serializes onto one, every LLM exchange is logged for
+  debugging, and listener votes arbitrate between workflow variants.
+- **Tags** — tracks carry tags (static per prompt/workflow plus LLM-picked),
+  with per-tag Wilson aggregation in the admin panel for cross-cutting
+  "what actually works" analysis.
 - **Variations** — every track's ABC score is kept; popular songs get re-rendered
   (optionally under a *different style prompt* = new instrumentation) with a fresh seed.
 - **Disk quota without waste** — when over quota, generation *pauses*. Unplayed audio is
@@ -58,12 +70,46 @@ python -m infiniradio                 # serve on http://127.0.0.1:8000
 ## Testing without a GPU
 
 ```bash
-python -m infiniradio --mockaudio
+python -m infiniradio --mockaudio          # sine-tone audio
+python -m infiniradio --mockaudio --mockllm   # + scripted LLM: full lyrics pipeline
 ```
 
 The mock generator is synthesizes placeholder tone "songs" so you can
 exercise the whole pipeline (DJ, votes, eviction, admin) before pointing it
-at a real GPU.
+at a real GPU. The mock LLM scripts the reference workflows' stages —
+including their gates — so commissioning, the two-phase job flow, stage
+logging and tagging all run end to end with no endpoint at all.
+
+## LLM lyrics workflows (optional)
+
+Point `[llm]` at any OpenAI-compatible endpoint (OpenRouter, DeepSeek,
+GLM, Kimi, koboldcpp, vLLM, llama.cpp, Ollama — they all speak
+`/v1/chat/completions`) and the DJ starts commissioning lyrics jobs
+alongside instrumental prompts, weighted by the same vote bandit:
+
+```toml
+[llm]
+enabled = true
+base_url = "http://gpu-box:5000/v1"
+model = "glm-4.5-air"        # must match the endpoint's model name
+```
+
+Workflows live in `lyrics_workflows/<name>/` — a `workflow.toml` plus one
+Jinja template per stage prompt; two ship as examples (`jp-title-first`,
+its Chinese-drafting twin `zh-title-first`). Audition prompts and runs
+without a server:
+
+```bash
+python -m infiniradio.lyrics --list
+python -m infiniradio.lyrics --dry-run jp-title-first
+python -m infiniradio.lyrics --run jp-title-first --mock
+python -m infiniradio.llm --status      # probe the configured endpoint
+```
+
+Details (stage gates, retry feedback, resume, tags, the job phase
+pipeline) are in **[lyrics_workflows/README.md](lyrics_workflows/README.md)**.
+If text and music share one GPU, set `lyrics.serialize_with_render = true`
+to keep the phases from overlapping.
 
 ## Real generation (ComfyUI + YuE2)
 
@@ -125,6 +171,7 @@ the configuration against generated songs. Thresholds live under
 config.toml          settings (copy from config.toml.example)
 workflow/            ComfyUI workflow (API format) used as submit template
 prompts/             seed prompt library (TOML), imported on first boot
+lyrics_workflows/    LLM lyrics pipelines (workflow.toml + Jinja templates)
 sidecar/             cleanup service for the ComfyUI machine
 data/                runtime: SQLite DB, music/<id>/{original, playout.m4a, score.abc}, hls/
 ```

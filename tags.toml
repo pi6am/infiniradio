@@ -1,0 +1,25 @@
+# Tag vocabulary (seeded into the DB tags table at every startup; the file
+# curates the approved list, the DB accumulates usage).
+#
+# llm_tags: offered to lyrics workflows' tagging stage — genres and vocal
+#   types. Keep entries mutually exclusive where possible: overlaps are
+#   what makes the LLM dither (never list both "vocal" and "male vocal").
+#   Tags a workflow forces anyway ("english") do NOT belong here.
+#
+# static_tags: registered in the vocabulary but never offered to the LLM —
+#   applied automatically by workflows (vocal, english) and prompt seeds
+#   (instrumental).
+
+llm_tags = [
+  # genres / styles
+  "pop", "rock", "hip-hop", "rap", "rnb", "country", "jazz", "classical",
+  "electronic", "edm", "house", "techno", "trance", "dubstep", "dnb",
+  "ambient", "synthwave", "alt-rock", "indie", "metal", "punk", "hard-rock",
+  "psychedelic", "grunge", "blues", "soul", "funk", "ska", "reggae",
+  "folk", "latin", "afrobeats", "world", "lo-fi", "acoustic", "chill",
+  "game", "chiptune", "industrial", "cinematic",
+  # vocal types
+  "male vocal", "female vocal",
+]
+
+static_tags = ["vocal", "english", "instrumental"]

@@ -6,6 +6,17 @@
   <form method="post" action="/admin/generate">
     <input type="hidden" name="csrf" value="{{ csrf }}">
 
+    {% if workflows %}
+    <label>lyrics workflow (LLM pipeline: title → lyrics → style; then rendered)</label>
+    <select name="workflow_id">
+      <option value="">— none —</option>
+      {% for w in workflows %}
+      <option value="{{ w.name }}">{{ w.name }} — {{ w.description }}</option>
+      {% endfor %}
+    </select>
+    <p class="muted" style="margin-top:4px">choosing a workflow ignores the prompt fields below</p>
+    {% endif %}
+
     <label>from an existing prompt</label>
     <select name="prompt_id">
       <option value="0">— custom (below) —</option>

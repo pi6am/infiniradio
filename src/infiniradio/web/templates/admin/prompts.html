@@ -17,11 +17,12 @@
     Wilson score of that prompt's aired tracks — quality steers gently, and every prompt keeps a
     nonzero floor so one style can't dominate by sheer volume.</p>
   <table>
-    <tr><th>name</th><th>enabled</th><th>tracks</th><th>weight</th><th>used</th><th>last used</th><th></th></tr>
+    <tr><th>name</th><th>enabled</th><th>tags</th><th>tracks</th><th>weight</th><th>used</th><th>last used</th><th></th></tr>
     {% for p in prompts %}
     <tr>
       <td><a href="/admin/prompts/edit/{{ p.id }}">{{ p.name }}</a></td>
       <td>{% if p.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</td>
+      <td class="muted">{{ p.tags | join(', ') or '—' }}</td>
       <td class="muted">{{ p.tracks }}</td>
       <td class="muted">{{ p.weight }} <span title="selection weight">(avg {{ p.avg_score }} · {{ p.aired }} aired)</span></td>
       <td class="muted">{{ p.times_used }}</td>
@@ -34,8 +35,51 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" class="muted">no prompts — add one or re-import the seed files</td></tr>
+    <tr><td colspan="8" class="muted">no prompts — add one or re-import the seed files</td></tr>
     {% endfor %}
   </table>
 </div>
+
+{% if workflows %}
+<div class="card">
+  <h2 style="margin-top:0">lyrics workflows</h2>
+  <p class="muted">File-defined LLM pipelines (lyrics_workflows/&lt;name&gt;/workflow.toml; edit on
+    disk and restart). Workflows join the same weighted selection as prompts — listener votes
+    arbitrate between variants. The <span class="pill">lyrics</span> phase runs on the LLM while
+    earlier jobs render.</p>
+  <table>
+    <tr><th>workflow</th><th>enabled</th><th>stages</th><th>static tags</th><th>tracks</th><th>weight</th></tr>
+    {% for w in workflows %}
+    <tr>
+      <td title="{{ w.description }}">{{ w.name }}</td>
+      <td>{% if w.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</td>
+      <td class="muted">{{ w.stages }}</td>
+      <td class="muted">{{ w.tags | join(', ') or '—' }}</td>
+      <td class="muted">{{ w.tracks }}</td>
+      <td class="muted">{{ w.weight if w.weight is not none else '—' }}
+        <span title="selection weight">(avg {{ w.avg_score }} · {{ w.aired }} aired)</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if tags %}
+<div class="card">
+  <h2 style="margin-top:0">tags</h2>
+  <p class="muted">Cross-cutting vote aggregation over every tagged track (prompts seed static
+    tags; lyrics workflows add LLM-picked ones). Average Wilson score of AIRED tracks per tag.</p>
+  <table>
+    <tr><th>tag</th><th>tracks</th><th>aired</th><th>avg Wilson</th></tr>
+    {% for t in tags %}
+    <tr>
+      <td>{{ t.name }}</td>
+      <td class="muted">{{ t.tracks }}</td>
+      <td class="muted">{{ t.aired }}</td>
+      <td class="muted">{{ t.avg_score }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
 {% endblock %}

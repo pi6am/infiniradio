@@ -22,6 +22,11 @@
 
   <table style="margin-top:14px">
     <tr><th>prompt</th><td>{{ t.prompt_name }}</td></tr>
+    {% if t.workflow_id %}<tr><th>workflow</th><td>{{ t.workflow_id }}
+      <span class="muted">(lyrics pipeline)</span></td></tr>{% endif %}
+    {% if t.theme_title %}<tr><th>theme title</th><td>{{ t.theme_title }}
+      <span class="muted">(seed that themed the lyrics; shown as the on-air subtitle)</span></td></tr>{% endif %}
+    {% if t.tags %}<tr><th>tags</th><td>{% for tag in t.tags %}<span class="pill">{{ tag }}</span> {% endfor %}</td></tr>{% endif %}
     <tr><th>parent</th><td>{% if parent %}<a href="/admin/track/{{ parent.id }}">{{ parent.title }}</a>{% else %}—{% endif %}</td></tr>
     <tr><th>seed / cot</th><td>{{ t.seed }} / {{ t.cot_mode }}</td></tr>
     <tr><th>duration / size</th><td>{{ t.duration_fmt }} / {{ t.size_fmt }}</td></tr>

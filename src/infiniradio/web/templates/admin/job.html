@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block bodyclass %}wide{% endblock %}
+{% block title %}admin — job #{{ j.id }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">job #{{ j.id }}
+    <span class="pill {% if j.status == 'done' %}ok{% elif j.status in ('failed', 'cancelled') %}err{% endif %}">{{ j.status }}</span></h2>
+  <table>
+    <tr><th>kind</th><td>{% if j.parent_track_id %}variation of
+        <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>
+        {% elif j.workflow_id %}lyrics workflow{% else %}new track (prompt){% endif %}</td></tr>
+    {% if j.workflow_id %}
+    <tr><th>workflow</th><td>{{ j.workflow_id }}{% if workflow %} — {{ workflow.description }}{% endif %}</td></tr>
+    <tr><th>phase</th><td>{{ j.phase }}{% if stage_progress %} ({{ stage_progress }}){% endif %}</td></tr>
+    {% endif %}
+    {% if j.prompt_id %}<tr><th>prompt</th><td>{{ j.prompt_name or '—' }}</td></tr>{% endif %}
+    <tr><th>track</th><td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td></tr>
+    <tr><th>seed</th><td class="muted">{{ j.seed or '—' }}</td></tr>
+    <tr><th>created</th><td class="muted">{{ j.created_at }}</td></tr>
+    <tr><th>finished</th><td class="muted">{{ j.finished_at or '' }}</td></tr>
+    {% if j.error %}<tr><th>error</th><td style="color:var(--bad)">{{ j.error }}</td></tr>{% endif %}
+  </table>
+
+  {% if outputs %}
+  <h3>outputs</h3>
+  <table>
+    <tr><th>title</th><td>{{ outputs.title or '(fallback: seed title)' }}</td></tr>
+    <tr><th>theme title</th><td>{{ outputs.theme_title or '—' }}</td></tr>
+    <tr><th>tags</th><td class="muted">{{ outputs.tags | join(', ') }}</td></tr>
+  </table>
+  <p class="muted" style="margin-bottom:0">style:</p>
+  <pre class="abc">{{ outputs.style }}</pre>
+  {% endif %}
+</div>
+
+{% if stages %}
+<div class="card">
+  <h2 style="margin-top:0">llm stage log</h2>
+  <p class="muted" style="margin-top:0">{{ stages | length }} LLM call(s) — every prompt sent,
+    every reply, every gate verdict. Append-only; retained for debugging and prompt tuning.</p>
+  {% for s in stages %}
+  <details {% if not s.gate %}open{% endif %} style="margin-bottom:10px">
+    <summary>
+      <b>{{ s.stage_id }}</b> · attempt {{ s.attempt }} · {{ "%.1f"|format(s.duration_s) }}s
+      {% if s.model %}· {{ s.model }}{% endif %}
+      {% if s.usage.completion_tokens %}· {{ s.usage.completion_tokens }} out / {{ s.usage.prompt_tokens }} in tokens{% endif %}
+      {% if s.gate %}<span class="pill err">rejected</span>{% else %}<span class="pill ok">ok</span>{% endif %}
+    </summary>
+    {% if s.gate %}
+    <p style="color:var(--bad);margin:6px 0">
+      {% for f in s.gate %}{{ f.code }}[{{ f.check }}] {{ f.detail }}<br>{% endfor %}
+    </p>
+    {% endif %}
+    <p class="muted" style="margin:6px 0 0">prompt sent:</p>
+    <pre class="abc">{{ s.prompt_text }}</pre>
+    <p class="muted" style="margin:6px 0 0">reply:</p>
+    <pre class="abc">{{ s.response_text }}</pre>
+    {% if s.vars %}<p class="muted" style="margin:6px 0 0">variables set:</p>
+    <pre class="abc">{% for k, v in s.vars.items() %}{{ k }} = {{ v | truncate(300) }}
+{% endfor %}</pre>{% endif %}
+  </details>
+  {% endfor %}
+</div>
+{% elif j.workflow_id %}
+<div class="card muted">no LLM calls logged for this job
+  {% if j.phase == 'lyrics' %}(lyrics phase not started){% else %}(stage log pruned?){% endif %}</div>
+{% endif %}
+{% endblock %}

@@ -73,10 +73,15 @@ def _prompt_names(db: DB) -> dict[int, str]:
 
 
 def track_public(row: dict, prompts: dict[int, str], my: dict[int, int]) -> dict:
+    # Subtitle: workflow tracks show the seed title that themed the lyrics
+    # ("The Shape of a Dream · Gauzy and Stated"); everything else shows the
+    # prompt name, and workflow-less customs stay "custom".
+    subtitle = row.get("theme_title") or prompts.get(row["prompt_id"]) \
+        or row.get("workflow_id") or "custom"
     return {
         "id": row["id"],
         "title": row["title"],
-        "prompt": prompts.get(row["prompt_id"], "custom"),
+        "prompt": subtitle,
         "music_key": row["music_key"],
         "tempo": row["tempo"],
         "duration_s": row["duration_s"],

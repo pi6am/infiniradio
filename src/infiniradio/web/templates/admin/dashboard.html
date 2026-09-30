@@ -48,12 +48,12 @@
   </div>
   {% if queue %}
   <table>
-    <tr><th>order</th><th>title</th><th>prompt</th><th>queued</th><th></th></tr>
+    <tr><th>order</th><th>title</th><th>style / theme</th><th>queued</th><th></th></tr>
     {% for q in queue %}
     <tr>
       <td class="muted">#{{ loop.index }}</td>
       <td><a href="/admin/track/{{ q.track_id }}">{{ q.title }}</a></td>
-      <td class="muted">{{ q.prompt_name or 'custom' }}</td>
+      <td class="muted">{{ q.theme_title or q.prompt_name or q.workflow_id or 'custom' }}</td>
       <td class="muted">{{ q.queued_at }}</td>
       <td>
         <form class="inline" method="post" action="/admin/queue/{{ q.qid }}/remove">
@@ -116,6 +116,15 @@
       <p style="color:var(--bad);margin:8px 0 0">generation paused: {{ gen_reason }}</p>
     {% endif %}
   </div>
+  <div class="card stat">
+    <h2 style="margin-top:0">lyrics llm</h2>
+    <div class="big">{{ llm.backend }}</div>
+    {% if llm.ok is none %}<span class="muted">disabled — instrumental prompts only</span>
+    {% elif llm.ok %}<span class="pill ok">reachable</span>
+      <span class="muted">{{ llm.model or 'default model' }}</span>
+    {% else %}<span class="pill err">unreachable</span> <span class="muted">{{ llm.error }}</span>{% endif %}
+    {% if llm.warning %}<p style="color:var(--bad);margin:8px 0 0">{{ llm.warning }}</p>{% endif %}
+  </div>
 </div>
 
 <div class="card">
@@ -127,12 +136,12 @@
     </form>
   </div>
   <table>
-    <tr><th>id</th><th>kind</th><th>prompt</th><th>track</th><th>status</th><th>error</th><th>created</th></tr>
+    <tr><th>id</th><th>kind</th><th>style / theme</th><th>track</th><th>status</th><th>error</th><th>created</th></tr>
     {% for j in jobs %}
     <tr>
-      <td>{{ j.id }}</td>
+      <td><a href="/admin/jobs/{{ j.id }}">{{ j.id }}</a></td>
       <td>{% if j.parent_track_id %}variation of <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>{% else %}new{% endif %}</td>
-      <td>{{ j.prompt_name or j.style_override or '—' }}</td>
+      <td>{{ j.workflow_id or j.prompt_name or j.style_override or '—' }}</td>
       <td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td>
       <td><span class="pill {% if j.status == 'done' %}ok{% elif j.status in ('failed', 'cancelled') %}err{% endif %}">{{ j.status }}</span></td>
       <td class="muted" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ j.error or '' }}">{{ j.error or '' }}</td>

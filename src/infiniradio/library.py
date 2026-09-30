@@ -87,20 +87,35 @@ def track_dir(cfg: Config, track_id: int) -> Path:
 
 
 def create_track(db: DB, cfg: Config, *, prompt_id: int | None, parent_track_id: int | None,
-                 style_text: str, lyrics_snapshot: str, seed: int, cot_mode: str) -> int:
+                 style_text: str, lyrics_snapshot: str, seed: int, cot_mode: str,
+                 workflow_id: str | None = None, title: str = "",
+                 theme_title: str = "") -> int:
+    """Placeholder row for a generating track.
+
+    title: set (LLM-extracted song name) when the workflow produced one;
+    empty for a random naming title assigned at ingest. theme_title: the
+    seed title that themed the lyrics workflow — shown as the display
+    subtitle for workflow tracks.
+    """
     track_id = db.execute(
-        "INSERT INTO tracks (title, parent_track_id, prompt_id, style_text, lyrics_snapshot,"
-        " seed, cot_mode, status, created_at)"
-        " VALUES ('', ?, ?, ?, ?, ?, ?, 'generating', ?)",
-        (parent_track_id, prompt_id, style_text, lyrics_snapshot, seed, cot_mode, iso(utcnow())),
+        "INSERT INTO tracks (title, parent_track_id, prompt_id, workflow_id, theme_title,"
+        " style_text, lyrics_snapshot, seed, cot_mode, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'generating', ?)",
+        (title, parent_track_id, prompt_id, workflow_id, theme_title or "",
+         style_text, lyrics_snapshot, seed, cot_mode, iso(utcnow())),
     )
     track_dir(cfg, track_id).mkdir(parents=True, exist_ok=True)
     return track_id
 
 
 
-async def ingest(db: DB, cfg: Config, track_id: int, result: GenResult) -> dict:
-    """Complete a generating track: probe, transcode playout, finalize DB row."""
+async def ingest(db: DB, cfg: Config, track_id: int, result: GenResult,
+                 tags: list[str] | None = None) -> dict:
+    """Complete a generating track: probe, transcode playout, finalize DB row.
+
+    tags (from a lyrics workflow's outputs) are applied via the vocabulary
+    after the row is finalized.
+    """
     tdir = track_dir(cfg, track_id)
     original = result.original_path
     if not original.is_absolute():
@@ -115,9 +130,10 @@ async def ingest(db: DB, cfg: Config, track_id: int, result: GenResult) -> dict:
     row = db.one("SELECT * FROM tracks WHERE id = ?", (track_id,)) or {}
     parent = db.one("SELECT * FROM tracks WHERE id = ?", (row.get("parent_track_id"),)) \
         if row.get("parent_track_id") else None
-    # Fresh tracks and variations both get a random generated title; the
-    # prompt/lineage context stays in the DB (admin/player metadata).
-    title = naming.unique_title(db)
+    # Workflow tracks keep their LLM-extracted title (assigned at creation);
+    # everything else gets a random generated title. The prompt/lineage
+    # context stays in the DB (admin/player metadata).
+    title = (row.get("title") or "").strip() or naming.unique_title(db)
 
     key, tempo = parse_abc_header(result.abc_text or "")
     db.execute(
@@ -128,6 +144,12 @@ async def ingest(db: DB, cfg: Config, track_id: int, result: GenResult) -> dict:
          f"{track_id}/{original.name}", f"{track_id}/playout.m4a",
          result.abc_text or "", track_id),
     )
+    # Tags from the lyrics workflow (static + LLM-picked), validated against
+    # the vocabulary: unknown tags are added or dropped per lyrics.allow_new_tags.
+    if tags:
+        applied = apply_track_tags(db, cfg, track_id, tags)
+        if applied:
+            log.info("track %s tagged: %s", track_id, ", ".join(applied))
     log.info("ingested track %s (%s, %.0fs, %s) %s", track_id, title, duration,
              human_bytes(size), "variation" if parent else "")
     return db.one("SELECT * FROM tracks WHERE id = ?", (track_id,)) or {}
@@ -229,14 +251,126 @@ def disk_usage(db: DB) -> int:
     return int(row["n"]) if row else 0
 
 
+# ---------------------------------------------------------------- tags
+
+def normalize_tag(name: str) -> str:
+    return name.strip().strip("`\"'").strip().lower()
+
+
+def _tag_id(db: DB, cfg: Config, name: str) -> int | None:
+    """Get-or-create a vocabulary tag; None when the name is unusable or
+    unknown tags are not allowed (lyrics.allow_new_tags = false). New tags
+    are created llm_pickable = 0 (not offered to the LLM until tags.toml
+    adopts them)."""
+    name = normalize_tag(name)
+    if not name:
+        return None
+    row = db.one("SELECT id FROM tags WHERE name = ?", (name,))
+    if row is not None:
+        return row["id"]
+    if not bool(cfg.get("lyrics.allow_new_tags", True)):
+        return None
+    return db.execute("INSERT INTO tags (name, created_at) VALUES (?, ?)",
+                      (name, iso(utcnow())))
+
+
+def load_tag_seeds(cfg: Config) -> tuple[list[str], list[str]]:
+    """(llm_tags, static_tags) from the configured seed file — the pure
+    loader, usable without a DB (the audition CLI uses it too)."""
+    path = cfg.path("tags.seed_file")
+    if not path.is_file():
+        return [], []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError(f"cannot read tag seed file {path}: {exc}") from exc
+    llm = [normalize_tag(t) for t in data.get("llm_tags") or []]
+    static = [normalize_tag(t) for t in data.get("static_tags") or []]
+    llm = [t for t in llm if t and t not in static]
+    return llm, [t for t in static if t]
+
+
+def seed_tags(db: DB, cfg: Config) -> int:
+    """Seed the tag vocabulary from tags.toml at every startup: insert
+    missing names and refresh the llm_pickable flags. The file curates the
+    approved list; the DB accumulates usage and per-tag stats. Returns the
+    number of LLM-pickable tags."""
+    llm, static = load_tag_seeds(cfg)
+    if not llm and not static:
+        return 0
+    for name in llm:
+        tag_id = _tag_id(db, cfg, name)
+        if tag_id:
+            db.execute("UPDATE tags SET llm_pickable = 1 WHERE id = ?", (tag_id,))
+    for name in static:
+        tag_id = _tag_id(db, cfg, name)
+        if tag_id:
+            db.execute("UPDATE tags SET llm_pickable = 0 WHERE id = ?", (tag_id,))
+    if llm:
+        log.info("tag vocabulary: %d LLM-pickable, %d static", len(llm), len(static))
+    return len(llm)
+
+
+def apply_track_tags(db: DB, cfg: Config, track_id: int, names: list[str]) -> list[str]:
+    """Link tags to a track (get-or-create each). Returns the applied names."""
+    applied: list[str] = []
+    for name in names:
+        tag_id = _tag_id(db, cfg, name)
+        if tag_id is None:
+            continue
+        db.execute("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?, ?)",
+                   (track_id, tag_id))
+        applied.append(normalize_tag(name))
+    return applied
+
+
+def apply_prompt_tags(db: DB, cfg: Config, prompt_id: int, names: list[str]) -> list[str]:
+    """Same for prompts (static tags from the seed files)."""
+    applied: list[str] = []
+    for name in names:
+        tag_id = _tag_id(db, cfg, name)
+        if tag_id is None:
+            continue
+        db.execute("INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES (?, ?)",
+                   (prompt_id, tag_id))
+        applied.append(normalize_tag(name))
+    return applied
+
+
+def track_tags(db: DB, track_id: int) -> list[str]:
+    return [r["name"] for r in db.query(
+        "SELECT t.name FROM track_tags tt JOIN tags t ON t.id = tt.tag_id"
+        " WHERE tt.track_id = ? ORDER BY t.name", (track_id,))]
+
+
+def prompt_tags(db: DB, prompt_id: int) -> list[str]:
+    return [r["name"] for r in db.query(
+        "SELECT t.name FROM prompt_tags pt JOIN tags t ON t.id = pt.tag_id"
+        " WHERE pt.prompt_id = ? ORDER BY t.name", (prompt_id,))]
+
+
+def tag_vocabulary(db: DB) -> list[str]:
+    """LLM-pickable tag names — what a workflow's tagging stage is offered.
+    Forced/static tags (vocal, english, prompt genres) are never in this
+    list; presenting them as choices is what makes the LLM dither."""
+    return [r["name"] for r in db.query(
+        "SELECT name FROM tags WHERE llm_pickable = 1 ORDER BY name")]
+
+
 # ---------------------------------------------------------------- prompt seeds
 
 def import_prompts(db: DB, cfg: Config, only_new: bool = True) -> int:
-    """Import TOML prompt files from prompts.seed_dir. Skips existing names."""
+    """Import TOML prompt files from prompts.seed_dir. Skips existing names.
+
+    Also seeds each prompt's tags: the file's ``tags`` list when present,
+    else (backfill for pre-tag stations) the prompt name split on
+    dashes/underscores — "chiptune-upbeat" -> chiptune, upbeat.
+    """
     seed_dir = cfg.path("prompts.seed_dir")
     if not seed_dir.is_dir():
         return 0
     imported = 0
+    file_tags: dict[str, list[str]] = {}
     for f in sorted(seed_dir.glob("*.toml")):
         try:
             data = tomllib.loads(f.read_text(encoding="utf-8"))
@@ -246,6 +380,7 @@ def import_prompts(db: DB, cfg: Config, only_new: bool = True) -> int:
             if not name or not style:
                 log.warning("prompt seed %s: missing name or style, skipped", f.name)
                 continue
+            file_tags[name] = [str(t) for t in data.get("tags") or []]
             exists = db.one("SELECT id FROM prompts WHERE name = ?", (name,))
             if exists and only_new:
                 continue
@@ -265,4 +400,18 @@ def import_prompts(db: DB, cfg: Config, only_new: bool = True) -> int:
             log.warning("prompt seed %s failed: %s", f.name, exc)
     if imported:
         log.info("imported %d prompt(s) from %s", imported, seed_dir)
+
+    # Tag seeding / backfill (idempotent: prompts that already have tags
+    # keep them — after first boot the database is the source of truth).
+    seeded = 0
+    for p in db.query("SELECT id, name FROM prompts"):
+        if db.one("SELECT 1 FROM prompt_tags WHERE prompt_id = ? LIMIT 1", (p["id"],)):
+            continue
+        names = file_tags.get(p["name"])
+        if not names:
+            names = [part for part in re.split(r"[-_]+", p["name"].lower()) if part]
+        if apply_prompt_tags(db, cfg, p["id"], names):
+            seeded += 1
+    if seeded:
+        log.info("seeded tags for %d prompt(s)", seeded)
     return imported

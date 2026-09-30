@@ -13,7 +13,7 @@
     </div>
   </div>
   <table>
-    <tr><th>id</th><th>title</th><th>prompt</th><th>dur</th><th>plays</th>
+    <tr><th>id</th><th>title</th><th>style / theme</th><th>dur</th><th>plays</th>
         <th>listens</th><th>votes</th><th>score</th><th>size</th><th>last aired</th><th></th></tr>
     {% for t in tracks %}
     <tr>
@@ -21,7 +21,7 @@
       <td><a href="/admin/track/{{ t.id }}">{{ t.title or '—' }}</a>
         {% if t.is_variation %}<span class="pill">var</span>{% endif %}
         {% if t.protected %}<span class="pill ok">protected</span>{% endif %}</td>
-      <td class="muted">{{ t.prompt_name }}</td>
+      <td class="muted">{{ t.subtitle }}</td>
       <td class="muted">{{ t.duration_fmt }}</td>
       <td class="muted">{{ t.play_count }}</td>
       <td class="muted">{{ t.listens }}</td>

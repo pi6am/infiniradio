@@ -53,6 +53,37 @@ abc = "33:32"             # supplied ABC text (used when plan = false)
 abc_save = "43"           # SaveText node — the planning pass keeps it and its upstream nodes
 audio_save = "10"         # SaveAudioAdvanced node (format patched per audio_format)
 
+# ---- LLM lyrics generation (optional) ----
+# With llm.enabled = false (the default) no client is ever constructed and
+# the station behaves exactly as before. Any OpenAI-compatible endpoint
+# works (OpenRouter, DeepSeek, GLM, Kimi, koboldcpp, vLLM, llama.cpp, ...).
+# Pipeline testing without an endpoint: `python -m infiniradio --mockllm`
+# (scripted responses; combine with --mockaudio for full local runs).
+[llm]
+enabled = false
+backend = "openai"        # openai = /v1/chat/completions ("mock" is flag-only)
+base_url = "http://127.0.0.1:8000/v1"
+api_key = ""
+model = ""                # must match the endpoint's served model name
+temperature = 1.0
+max_output_tokens = 8192
+timeout_s = 900.0
+transport_retries = 3     # 429/5xx/timeout retries with backoff; content
+                          # quality retries belong to the workflow stages
+
+[lyrics]
+# One directory per workflow: workflow.toml (control flow) + Jinja templates
+# (the prompts). Loaded and validated once at startup — a typo is a startup
+# error (the names/ rule). See lyrics_workflows/README.md.
+workflows_dir = "lyrics_workflows"
+# true = the text and music backends share one GPU: never run a lyrics job
+# while a render is in progress. false (default) = separate machines/GPUs:
+# the next job's lyrics generate while the current job renders.
+serialize_with_render = false
+# Tags picked by a workflow's tagging stage that aren't already in the
+# vocabulary: true = add them, false = drop them.
+allow_new_tags = true
+
 # Two-pass fresh-song generation: the ABC is planned in a cheap text-only
 # pass and re-planned with a new seed when it fails the sanity gate below;
 # only accepted scores go to the audio render. Details: infiniradio/abc_audit.py
@@ -105,6 +136,13 @@ quota_gb = 50.0                # runtime: max disk used by music (generation pau
 # TOML files in this directory are imported into the prompt library on first
 # boot; afterwards the database is the source of truth (export from admin).
 seed_dir = "prompts"
+
+[tags]
+# Tag vocabulary seed (see tags.toml): llm_tags are offered to lyrics
+# workflows' tagging stage (genres + vocal types); static_tags are
+# vocabulary-only (applied by workflows/prompts). Seeded at every startup —
+# edit tags.toml to curate the list.
+seed_file = "tags.toml"
 
 [naming]
 # Word-list directory for generated track titles: nouns.txt, adjectives.txt,

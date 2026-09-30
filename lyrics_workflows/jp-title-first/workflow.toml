@@ -1,0 +1,151 @@
+# Reference lyrics workflow, transcribed from the hand-tested pipeline:
+# random title -> brainstorm -> foreign-language draft -> English translation
+# -> style prompt -> rhythm refinement.
+#
+# Tags describe the OUTPUT track (the final lyrics are English); the
+# intermediate language this workflow drafts in is part of its identity and
+# travels as tracks.workflow_id. A workflow producing final lyrics in
+# another language should tag that language instead.
+name = "jp-title-first"
+description = "random title → brainstorm → Japanese draft → English translation → style → rhythm refine"
+enabled = true
+seed_title = true
+tags = ["vocal", "english"]
+
+[params]
+language = "Japanese"
+script_note = "using kanji, hiragana and katakana as appropriate"
+style_guide = ""
+#style_guide = "A fast-paced and energetic J-pop-style intro to an anime. It should be catchy and have a strong hook."
+#style_guide = "A dark industrial techno EDM track. Heavy beat and layered harmonics."
+#style_guide = "An indie rock grunge track from the 1990s."
+#style_guide = "An R&B house dance pop rock song. Catchy, fast paced, with a strong dance beat."
+#style_guide = "A prog rock anthem. Heavy layered guitar and drums with a complex message."
+lyrics_guide = ""
+#lyrics_guide = "Repetitive catchy hook. Short lines with six to eight lines per verse. Repetitive lyrics."
+#lyrics_guide = "Repetitive catchy hook. Each verse has four lines. The chorus has two lines repeated twice each."
+#lyrics_guide = "Repetitive catchy hook. Each verse has five lines. The chorus has one strong line repeated three times."
+#lyrics_guide = "Fast paced and punchy. Each verse has five lines with a complementary chorus that progresses each time it repeats."
+#rhyme_guide = ""
+rhyme_guide = "Don't enforce rhymes at the end of lines unless it's natural to do so, but internal rhymes are encouraged."
+#rhyme_guide = "Rewrite stanzas to follow an AABCDD rhyming pattern when possible. Use complex rhymes, internal rhymes are encouraged."
+#rhyme_guide = "Rewrite stanzas to follow an ABABCD rhyming pattern when possible. Internal rhymes are encouraged."
+
+[output]
+title = "song_name"       # extracted from the name stage; falls back to the seed title
+style = "style_prompt"    # required: the GenRequest style
+lyrics = "final_lyrics"   # required: the GenRequest lyrics
+tags = "track_tags"       # LLM-picked; sanitized against the tag vocabulary
+max_tags = 5              # ... then truncated to this many (statics don't count)
+
+[[stage]]
+id = "brainstorm"
+template = "brainstorm.j2.md"
+saves = "brainstorm"
+thread = "new"
+max_attempts = 2
+feedback_template = "feedback.j2.md"
+
+[stage.gate]
+max_chars = 4000
+
+[[stage]]
+id = "foreign_lyrics"
+template = "foreign_lyrics.j2.md"
+saves = "foreign_lyrics"
+thread = "new"
+max_attempts = 3
+feedback_template = "feedback.j2.md"
+
+[stage.gate]
+# at least one recognized section header — NOT "verse AND chorus"
+max_chars = 3000
+any_of = [
+  '\[Verse\]', '\[Chorus\]', '\[Intro\]', '\[Outro\]',
+  '\[Bridge\]', '\[Solo\]', '\[Instrumental\]',
+]
+
+[[stage]]
+id = "translate"
+template = "translate.j2.md"
+# The translated song is extracted as a song block (fenced or bare, with
+# commentary and a [Title] section stripped) — same robustness as refine.
+block = "lyrics_en"
+thread = "new"
+max_attempts = 3
+feedback_template = "feedback.j2.md"
+
+[stage.gate]
+max_chars = 6000
+any_of = [
+  '\[Verse\]', '\[Chorus\]', '\[Intro\]', '\[Outro\]',
+  '\[Bridge\]', '\[Solo\]', '\[Instrumental\]',
+]
+
+[[stage]]
+# Song name as its own cheap continuation of the translation thread: a
+# malformed Name line only retries this short exchange, never the whole
+# (expensive, thinking-heavy) translation. Parsing is liberal — ordered
+# alternatives, first match wins — so retries should be rare.
+id = "name"
+template = "name.j2.md"
+thread = "continue"
+max_attempts = 2
+feedback_template = "feedback.j2.md"
+
+[stage.extract]
+# Greedy-to-end-of-line so delimiters inside the name itself (apostrophes
+# in "Don't", commas, …) don't truncate it: the LAST delimiter on the line
+# closes the value. [ \t*_]* absorbs markdown bold/italic around both the
+# "Name" word and the value; backticks are the requested format, the rest
+# absorb the model's variations.
+song_name = [
+  '(?m)^[ \t>*-]*Name[ \t*_]*:[ \t*_]*`([^\n]*)`[ \t*_]*$',
+  '(?m)^[ \t>*-]*Name[ \t*_]*:[ \t*_]*"([^\n]*)"[ \t*_]*$',
+  '(?m)^[ \t>*-]*Name[ \t*_]*:[ \t*_]*“([^\n]*)”[ \t*_]*$',
+  "(?m)^[ \\t>*-]*Name[ \\t*_]*:[ \\t*_]*'([^\\n]*)'[ \\t*_]*$",
+  '(?m)^[ \t>*-]*Name[ \t*_]*:[ \t*_]*‘([^\n]*)’[ \t*_]*$',
+  '(?m)^[ \t>*-]*Name[ \t*_]*:[ \t*_]*([^\n]+)',
+]
+
+[[stage]]
+# Continues the translation thread ("another user turn" in the original
+# hand-tested pipeline) — translate, name and style share one conversation.
+id = "style"
+template = "style.j2.md"
+thread = "continue"
+max_attempts = 3
+feedback_template = "feedback.j2.md"
+
+[stage.extract]
+style_prompt = '(?s)Style prompt:\s*```\s*\n(.*?)\n```'
+
+[[stage]]
+id = "refine"
+template = "refine.j2.md"
+# The refined song is extracted from the reply as a song block (fenced
+# block containing a section header, else the bare reply; a leading
+# [Title] section is stripped) so post-"thinking" commentary never reaches
+# YuE2. The gate applies to the extracted block, not the raw reply.
+block = "final_lyrics"
+thread = "new"
+max_attempts = 2
+feedback_template = "feedback.j2.md"
+
+[stage.gate]
+max_chars = 3000
+any_of = [
+  '\[Verse\]', '\[Chorus\]', '\[Intro\]', '\[Outro\]',
+  '\[Bridge\]', '\[Solo\]', '\[Instrumental\]',
+]
+
+[[stage]]
+id = "tags"
+template = "tags.j2.md"
+saves = "track_tags"
+thread = "new"
+max_attempts = 2
+feedback_template = "feedback.j2.md"
+
+[stage.gate]
+min_chars = 3

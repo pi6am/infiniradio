@@ -1,5 +1,5 @@
 name = "ambient-drone"
-style = "a slow ambient drone piece, warm evolving pads, deep sub bass, sparse bell melody, atmospheric, meditative"
+style = "a slow ambient drone piece, layered evolving pads, deep sub bass, no percussion, spacious reverb, meditative"
 song = """
 [Intro]
 
@@ -8,3 +8,4 @@ song = """
 [Outro]
 """
 cot = "full"
+tags = ["ambient", "drone", "instrumental"]

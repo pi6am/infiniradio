@@ -122,6 +122,66 @@ MIGRATIONS: dict[int, str] = {
     -- now-playing timeline stays frame-accurate.
     ALTER TABLE play_log ADD COLUMN played_s REAL;
     """,
+    6: """
+    -- LLM lyrics workflows (optional; see infiniradio/lyrics.py).
+    -- Jobs gain a two-phase lifecycle: phase 'lyrics' (LLM pipeline) then
+    -- 'render' (audio). progress holds the workflow engine's resumable
+    -- state (completed stages, saved variables, conversation threads) plus
+    -- the final outputs; job_stage_log is the append-only diagnostic trace
+    -- of every LLM call — prompt sent, reply, gate verdicts, token usage.
+    ALTER TABLE generation_jobs ADD COLUMN workflow_id TEXT;
+    ALTER TABLE generation_jobs ADD COLUMN phase TEXT NOT NULL DEFAULT 'render';
+    ALTER TABLE generation_jobs ADD COLUMN progress TEXT NOT NULL DEFAULT '{}';
+
+    CREATE TABLE job_stage_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL REFERENCES generation_jobs(id) ON DELETE CASCADE,
+      stage_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      prompt_text TEXT NOT NULL DEFAULT '',
+      response_text TEXT NOT NULL DEFAULT '',
+      vars_json TEXT NOT NULL DEFAULT '{}',
+      gate_json TEXT NOT NULL DEFAULT '[]',
+      model TEXT NOT NULL DEFAULT '',
+      usage_json TEXT NOT NULL DEFAULT '{}',
+      duration_s REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_stage_log_job ON job_stage_log(job_id);
+
+    -- Tracks from a workflow keep their lineage: the workflow slug, the
+    -- seed title that themed the brainstorm (shown as the display subtitle:
+    -- "The Shape of a Dream · Gauzy and Stated"), and tags for cross-cutting
+    -- vote aggregation (static workflow tags + LLM-picked dynamic tags).
+    ALTER TABLE tracks ADD COLUMN workflow_id TEXT;
+    ALTER TABLE tracks ADD COLUMN theme_title TEXT;
+
+    CREATE TABLE tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE track_tags (
+      track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+      PRIMARY KEY (track_id, tag_id)
+    );
+    CREATE TABLE prompt_tags (
+      prompt_id INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+      tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+      PRIMARY KEY (prompt_id, tag_id)
+    );
+    CREATE INDEX idx_tracks_workflow ON tracks(workflow_id);
+    """,
+    7: """
+    -- Tag vocabulary curation: tags.toml seeds the vocabulary at every
+    -- startup and decides which tags are offered to lyrics workflows'
+    -- tagging stage (llm_pickable). Genre/vocal tags are pickable;
+    -- workflow-forced tags ("vocal", "english") and prompt statics
+    -- ("instrumental") are vocabulary-only. Runtime-added tags default to
+    -- not pickable until the seed file adopts them.
+    ALTER TABLE tags ADD COLUMN llm_pickable INTEGER NOT NULL DEFAULT 0;
+    """,
 }
 
 

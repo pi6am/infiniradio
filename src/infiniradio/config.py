@@ -91,6 +91,45 @@ DEFAULTS: dict[str, Any] = {
         "downvote_evict_plays": 2,
         "quota_gb": 50.0,
     },
+    # LLM lyrics generation (optional; see src/infiniradio/llm/). With
+    # llm.enabled = false no client is constructed and lyrics workflows
+    # never run — the station behaves exactly as before.
+    "llm": {
+        "enabled": False,
+        # openai = any OpenAI-compatible /v1/chat/completions endpoint
+        # (OpenRouter, DeepSeek, GLM, Kimi, koboldcpp, vLLM, ...). The mock
+        # client is testing-only: --mockllm, never config.
+        "backend": "openai",
+        "base_url": "http://127.0.0.1:8000/v1",
+        "api_key": "",
+        "model": "",
+        "temperature": 1.0,
+        "max_output_tokens": 8192,
+        "timeout_s": 900.0,
+        # Transport-level retries (429/5xx/timeouts) with backoff; content
+        # quality retries belong to the workflow stages, not the client.
+        "transport_retries": 3,
+    },
+    "lyrics": {
+        # One directory per workflow: workflow.toml + Jinja templates.
+        # Loaded and validated once at startup (no hot reload), like names/.
+        "workflows_dir": "lyrics_workflows",
+        # true = the text and music backends share one GPU: never run a
+        # lyrics job while a render is in progress (serializes the phases).
+        # false (default) = separate machines/GPUs: lyrics for the next job
+        # generate while the current job renders.
+        "serialize_with_render": False,
+        # Tags picked by a workflow's tagging stage that are not already in
+        # the vocabulary: true = add them, false = drop them. (Picks are
+        # sanitized against the vocabulary before this ever applies.)
+        "allow_new_tags": True,
+    },
+    "tags": {
+        # Tag vocabulary seed (see tags.toml): llm_tags are offered to the
+        # workflows' tagging stage, static_tags are vocabulary-only. Seeded
+        # at every startup — edit the file to curate the list.
+        "seed_file": "tags.toml",
+    },
     "prompts": {
         "seed_dir": "prompts",
     },

@@ -1,0 +1,1 @@
+Brainstorm ideas about a song with the theme "{{ title }}". *DO NOT* write any lyrics. Just come up with a themes and a rough progression of what each verse is about. *DO NOT* include the words of the theme in the song directly, it should be interpreted metaphorically. The progression of the song should tell a story, but in a non-obvious way.
