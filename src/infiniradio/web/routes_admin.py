@@ -345,11 +345,13 @@ async def track_page(request: Request, track_id: int):
     plays = db.query("SELECT started_at FROM play_log WHERE track_id = ?"
                      " ORDER BY id DESC LIMIT 20", (track_id,))
     prompts = db.query("SELECT id, name FROM prompts WHERE enabled = 1 ORDER BY name")
+    gen_job = db.one("SELECT id, status FROM generation_jobs WHERE track_id = ?"
+                     " ORDER BY id DESC LIMIT 1", (track_id,))
     return request.app.state.templates.TemplateResponse(
         request, "admin/track.html",
         _ctx(request, t=track, parent=parent,
              children=[_track_with_meta(db, c) for c in children],
-             votes=votes, plays=plays, prompts=prompts))
+             votes=votes, plays=plays, prompts=prompts, gen_job=gen_job))
 
 
 @router.get("/track/{track_id}/audio")
