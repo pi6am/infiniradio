@@ -54,6 +54,18 @@ async def _main(cfg, rt) -> None:
     assert len(stage_rows) == 7 and all(r["response_text"] for r in stage_rows)
     print(f"lyrics phase done: 7 stages logged, title={outputs['title']!r}")
 
+    # phase timings recorded; the detail-page breakdown computes from them
+    from infiniradio.util import iso, parse_iso, utcnow
+    from infiniradio.web.routes_admin import _job_timings
+    assert job["lyrics_started_at"] and job["lyrics_finished_at"]
+    assert parse_iso(job["created_at"]) <= parse_iso(job["lyrics_started_at"]) \
+        <= parse_iso(job["lyrics_finished_at"])
+    timings = dict(_job_timings(job))
+    assert timings["waiting for lyrics"] and timings["lyrics"]
+    assert "waiting for render" not in timings  # render not claimed yet
+    assert "total" not in timings               # no finished_at, not running
+    print(f"timings recorded: {timings}")
+
     # build the render request from the job row (the render runner path)
     req = dj.build_request(db, job)
     assert "dream pop" in req.style and "[Chorus]" in req.lyrics and req.abc is None
@@ -87,6 +99,15 @@ async def _main(cfg, rt) -> None:
     j2 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid2,))
     assert j2["phase"] == "render" and j2["workflow_id"] is None
     print("prompt job enqueues straight to render (legacy behavior)")
+
+    # prompt-job timings: single waiting row (no lyrics phase)
+    db.execute("UPDATE generation_jobs SET render_started_at = ?, finished_at = ?,"
+               " status = 'done' WHERE id = ?",
+               (iso(utcnow()), iso(utcnow()), jid2))
+    timings = dict(_job_timings(db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid2,))))
+    assert timings["waiting"] and timings["rendering"] and timings["total"]
+    assert "lyrics" not in timings and "waiting for lyrics" not in timings
+    print(f"prompt-job timing rows: {list(timings)}")
 
     # failure persists completed stages; retry resumes, not restarts
     jid3 = dj.enqueue_job(db, workflow_id="jp-title-first")

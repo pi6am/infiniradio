@@ -219,6 +219,16 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE tracks ADD COLUMN delete_after TEXT;
     ALTER TABLE tracks ADD COLUMN hold INTEGER NOT NULL DEFAULT 0;
     """,
+    10: """
+    -- Job phase timing diagnostics: when each phase started/ended, so the
+    -- admin job view can break a job's lifetime into waiting / lyrics /
+    -- waiting / rendering components (quantifying, e.g., whether a new
+    -- LLM endpoint is actually faster). Timestamps are (re)set at each
+    -- claim, so they describe the most recent run of each phase.
+    ALTER TABLE generation_jobs ADD COLUMN lyrics_started_at TEXT;
+    ALTER TABLE generation_jobs ADD COLUMN lyrics_finished_at TEXT;
+    ALTER TABLE generation_jobs ADD COLUMN render_started_at TEXT;
+    """,
 }
 
 

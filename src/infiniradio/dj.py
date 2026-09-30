@@ -417,8 +417,9 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
     """
     db = rt.db
     spec: WorkflowSpec | None = rt.workflows.get(job["workflow_id"])
-    db.execute("UPDATE generation_jobs SET status = 'running', submitted_at = ?"
-               " WHERE id = ?", (iso(utcnow()), job["id"]))
+    db.execute("UPDATE generation_jobs SET status = 'running', submitted_at = ?,"
+               " lyrics_started_at = ? WHERE id = ?",
+               (iso(utcnow()), iso(utcnow()), job["id"]))
     if spec is None:
         _fail_job(db, job["id"],
                   f"workflow {job['workflow_id']!r} is not loaded (renamed or removed?)")
@@ -486,9 +487,9 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
         row = db.one("SELECT status FROM generation_jobs WHERE id = ?", (job["id"],))
         if row is not None and row["status"] == "running":
             db.execute(
-                "UPDATE generation_jobs SET progress = ?, phase = 'render', status = 'queued'"
-                " WHERE id = ?",
-                (json.dumps(final_progress, ensure_ascii=False), job["id"]))
+                "UPDATE generation_jobs SET progress = ?, phase = 'render', status = 'queued',"
+                " lyrics_finished_at = ? WHERE id = ?",
+                (json.dumps(final_progress, ensure_ascii=False), iso(utcnow()), job["id"]))
             log.info("job %s: lyrics done — %s (queued for render)", job["id"],
                      result.title or theme_title)
 
@@ -549,8 +550,9 @@ async def job_runner(rt) -> None:
                 continue
 
             db, cfg = rt.db, rt.cfg
-            db.execute("UPDATE generation_jobs SET status = 'running', submitted_at = ?"
-                       " WHERE id = ?", (iso(utcnow()), job["id"]))
+            db.execute("UPDATE generation_jobs SET status = 'running', submitted_at = ?,"
+                       " render_started_at = ? WHERE id = ?",
+                       (iso(utcnow()), iso(utcnow()), job["id"]))
             track_id = None
             try:
                 req = build_request(db, job)

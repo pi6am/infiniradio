@@ -988,9 +988,57 @@ def _stage_progress(rt, job: dict) -> str:
     return label + (f" · {completed[-1]}" if completed else "")
 
 
+def _between(later: str | None, earlier: str | None) -> str | None:
+    """'M:SS' between two ISO stamps; None when either side is missing."""
+    if not later or not earlier:
+        return None
+    try:
+        from ..util import parse_iso
+        secs = max(0.0, (parse_iso(later) - parse_iso(earlier)).total_seconds())
+    except ValueError:
+        return None
+    return fmt_duration(secs)
+
+
+def _job_timings(job: dict) -> list[tuple[str, str | None]]:
+    """The job's lifetime broken into waiting / lyrics / waiting / rendering
+    components from the phase timestamps (set at each claim, so they
+    describe the most recent run of each phase). Running phases show the
+    elapsed-so-far; jobs from before the timestamps existed show nothing."""
+    rows: list[tuple[str, str | None]] = []
+    now = iso(utcnow())
+    running = job.get("status") == "running"
+    is_workflow = bool(job.get("workflow_id"))
+
+    if is_workflow and job.get("lyrics_started_at"):
+        rows.append(("waiting for lyrics",
+                     _between(job["lyrics_started_at"], job.get("created_at"))))
+        if job.get("lyrics_finished_at"):
+            rows.append(("lyrics", _between(job["lyrics_finished_at"],
+                                            job["lyrics_started_at"])))
+        elif running and job.get("phase") == "lyrics":
+            rows.append(("lyrics (in progress)", _between(now, job["lyrics_started_at"])))
+        if job.get("lyrics_finished_at") and job.get("render_started_at"):
+            rows.append(("waiting for render",
+                         _between(job["render_started_at"], job["lyrics_finished_at"])))
+    if job.get("render_started_at"):
+        end = job.get("finished_at") or (now if running else None)
+        value = _between(end, job["render_started_at"])
+        if value:
+            if not is_workflow:
+                rows.append(("waiting", _between(job["render_started_at"],
+                                                 job.get("created_at"))))
+            rows.append(("rendering" if job.get("finished_at")
+                         else "rendering (in progress)", value))
+    total_end = job.get("finished_at") or (now if running else None)
+    if total_end and rows:
+        rows.append(("total", _between(total_end, job.get("created_at"))))
+    return rows
+
+
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 async def job_detail(request: Request, job_id: int):
-    """Full job view: the workflow's per-stage LLM trace from job_stage_log."""
+    """Full job view: phase timings + the workflow's per-stage LLM trace."""
     if not _is_admin(request):
         return _login_redirect()
     rt = request.app.state.rt
@@ -1019,11 +1067,16 @@ async def job_detail(request: Request, job_id: int):
             outputs = (_json.loads(job["progress"]) or {}).get("outputs") or {}
         except _json.JSONDecodeError:
             outputs = {}
+    llm_s = sum(s["duration_s"] or 0.0 for s in stages)
+    llm_conts = sum(int((s.get("usage") or {}).get("continuations") or 0) for s in stages)
     workflow = rt.workflows.get(job["workflow_id"]) if job.get("workflow_id") else None
     return request.app.state.templates.TemplateResponse(
         request, "admin/job.html",
         _ctx(request, j=job, stages=stages, outputs=outputs, workflow=workflow,
-             stage_progress=_stage_progress(rt, job)))
+             stage_progress=_stage_progress(rt, job),
+             timings=_job_timings(job),
+             llm_summary={"calls": len(stages), "seconds": round(llm_s, 1),
+                          "continuations": llm_conts}))
 
 
 @router.post("/jobs/{job_id}/retry")

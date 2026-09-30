@@ -22,6 +22,20 @@
     {% if j.error %}<tr><th>error</th><td style="color:var(--bad)">{{ j.error }}</td></tr>{% endif %}
   </table>
 
+  {% if timings %}
+  <h3>timing</h3>
+  <table>
+    {% for label, value in timings %}
+    <tr><th>{{ label }}</th><td>{{ value or '—' }}</td></tr>
+    {% endfor %}
+    {% if llm_summary.calls %}
+    <tr><th>llm calls</th><td class="muted">{{ llm_summary.calls }} exchange(s) ·
+      {{ llm_summary.seconds }}s total in the LLM{% if llm_summary.continuations %} ·
+      {{ llm_summary.continuations }} continuation(s){% endif %}</td></tr>
+    {% endif %}
+  </table>
+  {% endif %}
+
   {% if outputs %}
   <h3>outputs</h3>
   <table>
