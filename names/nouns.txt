@@ -20046,7 +20046,6 @@ pushes
 pushing
 puss
 pussies
-pussy
 put
 puts
 putt
@@ -25552,9 +25551,6 @@ testaments
 testator
 tester
 testers
-testes
-testicle
-testicles
 testimonial
 testimonials
 testimonies
@@ -26971,9 +26967,6 @@ vacuum
 vacuums
 vagabond
 vagaries
-vagina
-vaginas
-vaginitis
 vagrant
 vagueness
 vagus
