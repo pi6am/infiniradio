@@ -77,7 +77,7 @@ def run_janitor(db: DB, cfg: Config, active_ids: set[int]) -> dict:
     from .library import schedule_delete, trashed_bytes
 
     summary = {"finalized": 0, "downvote_evicted": 0, "quota_evicted": 0}
-    summary["finalized"] = finalize_deletions(db, cfg)
+    summary["finalized"] = finalize_deletions(db, cfg, active_ids)
 
     # 1. Tracks the audience has rejected: net votes at/below threshold after
     #    enough plays. They had their chances — trashed, not gone.

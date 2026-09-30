@@ -75,7 +75,7 @@
     {% endif %}
     <form class="inline" method="post" action="/admin/track/{{ t.id }}/delete">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button type="submit">delete (skips if airing)</button>
+      <button type="submit" title="moves the track to the trash (deletion buffer applies); if it is on air right now it simply finishes its airing">delete</button>
     </form>
   </div>
 </div>

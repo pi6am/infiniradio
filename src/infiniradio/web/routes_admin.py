@@ -3,7 +3,6 @@ Jinja2 + htmx-free plain forms (full page submissions) to keep it simple."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import math
@@ -478,21 +477,10 @@ async def track_delete(request: Request, track_id: int, csrf: str = Form("")):
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    # Never queued again, regardless of what follows.
+    # Never queued again, regardless of what follows. Trashing is safe even
+    # for the track currently on air: it finishes its airing, the janitor
+    # only hard-deletes after the buffer expires and nothing is airing.
     rt.db.execute("DELETE FROM play_queue WHERE track_id = ?", (track_id,))
-    feeder = rt.feeder
-    if feeder and track_id in feeder.active_ids:
-        # The track is being fed right now: skip it out of the buffer first
-        # (the decoder may hold the playout file open, which also blocks
-        # deletion on Windows), then remove the files.
-        feeder.request_skip()
-        for _ in range(150):  # up to ~15s
-            if track_id not in feeder.active_ids:
-                break
-            await asyncio.sleep(0.1)
-    # Through the deletion buffer: with library.deletion_buffer_hours > 0 the
-    # track becomes trashed (audio kept for review, restorable) instead of
-    # vanishing immediately.
     library.schedule_delete(rt.db, rt.cfg, track_id)
     return RedirectResponse(_back(request, "/admin/library"), status_code=303)
 
@@ -509,11 +497,18 @@ async def track_undelete(request: Request, track_id: int, csrf: str = Form("")):
 
 @router.post("/track/{track_id}/delete_now")
 async def track_delete_now(request: Request, track_id: int, csrf: str = Form("")):
-    """Skip the buffer: empty the trash for this track immediately."""
+    """Skip the buffer: empty the trash for this track immediately — unless
+    it is on air right now, in which case the deadline is expired instead
+    and the janitor collects it the moment the airing ends."""
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    library.delete_track(rt.db, rt.cfg, track_id)
+    airing = rt.feeder is not None and track_id in rt.feeder.active_ids
+    if airing:
+        rt.db.execute("UPDATE tracks SET delete_after = ? WHERE id = ? AND status = 'trashed'",
+                      (iso(utcnow()), track_id))
+    else:
+        library.delete_track(rt.db, rt.cfg, track_id)
     return RedirectResponse(_back(request, "/admin/library?status=trashed"), status_code=303)
 
 

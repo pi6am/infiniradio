@@ -180,19 +180,22 @@ def delete_track(db: DB, cfg: Config, track_id: int) -> bool:
 # ------------------------------------------------------------- deletion buffer
 
 def schedule_delete(db: DB, cfg: Config, track_id: int) -> bool:
-    """Condemn a track. With library.deletion_buffer_hours > 0 the track
-    moves to status 'trashed' — audio kept (still counting toward quota,
-    never aired) until delete_after passes, giving an admin time to
-    restore it (e.g. a coordinated downvote wave hit a good song). Buffer 0
-    skips straight to the real delete. Failed/generating placeholders are
-    always deleted immediately: there is no audio worth reviewing.
+    """Condemn a track: move it to the trash (status 'trashed', audio kept,
+    never aired again, still counting toward quota) with delete_after = now
+    + library.deletion_buffer_hours. The janitor — never this call — turns
+    trashed into a real deletion, and only once the deadline has passed AND
+    the track is not currently airing: trashing is always safe, even for
+    the song on air right now (it simply finishes its airing). Buffer 0
+    means the trash expires immediately; the janitor collects it on its
+    next tick. Failed/generating placeholders are deleted outright — no
+    audio to review, never airing.
     """
     row = db.one("SELECT status FROM tracks WHERE id = ?", (track_id,))
     if not row or row["status"] in ("deleted", "trashed"):
         return False
     db.execute("DELETE FROM play_queue WHERE track_id = ?", (track_id,))
     buffer_h = float(runtime_get(cfg, db, "library.deletion_buffer_hours"))
-    if row["status"] == "ready" and buffer_h > 0:
+    if row["status"] == "ready":
         delete_after = iso(utcnow() + timedelta(hours=buffer_h))
         db.execute("UPDATE tracks SET status = 'trashed', delete_after = ? WHERE id = ?",
                    (delete_after, track_id))
@@ -220,17 +223,21 @@ def trashed_bytes(db: DB) -> int:
     )["n"] or 0)
 
 
-def finalize_deletions(db: DB, cfg: Config) -> int:
+def finalize_deletions(db: DB, cfg: Config, active_ids: set[int] = frozenset()) -> int:
     """Empty the trash: hard-delete trashed tracks whose deadline has
-    passed. Runs on the janitor's clock and ONLY on the deadline — quota
-    pressure never fast-tracks it (that would defeat the anti-griefing
-    purpose: a vote wave plus a full disk could still destroy tracks
-    before review)."""
+    passed AND that are not currently airing (the file stays valid for the
+    feeder until the airing ends; deleting under it would also fail on
+    platforms that lock open files). Runs on the janitor's clock and ONLY
+    on the deadline — quota pressure never fast-tracks it (that would
+    defeat the anti-griefing purpose: a vote wave plus a full disk could
+    still destroy tracks before review)."""
     now = iso(utcnow())
     rows = db.query("SELECT id FROM tracks WHERE status = 'trashed'"
                     " AND delete_after IS NOT NULL AND delete_after <= ?", (now,))
     n = 0
     for r in rows:
+        if r["id"] in active_ids:
+            continue
         if delete_track(db, cfg, r["id"]):
             n += 1
     return n
