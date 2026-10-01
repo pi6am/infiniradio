@@ -412,6 +412,19 @@ def apply_prompt_tags(db: DB, cfg: Config, prompt_id: int, names: list[str]) -> 
     return applied
 
 
+def set_prompt_tags(db: DB, cfg: Config, prompt_id: int, names: list[str]) -> list[str]:
+    """REPLACE the prompt's tags (the admin editor's field is authoritative:
+    clearing it removes the links; names are created as needed)."""
+    db.execute("DELETE FROM prompt_tags WHERE prompt_id = ?", (prompt_id,))
+    return apply_prompt_tags(db, cfg, prompt_id, names)
+
+
+def set_style_tags(db: DB, cfg: Config, style_id: int, names: list[str]) -> list[str]:
+    """REPLACE the style's tags (same authority semantics)."""
+    db.execute("DELETE FROM style_tags WHERE style_id = ?", (style_id,))
+    return apply_style_tags(db, cfg, style_id, names)
+
+
 def track_tags(db: DB, track_id: int) -> list[str]:
     return [r["name"] for r in db.query(
         "SELECT t.name FROM track_tags tt JOIN tags t ON t.id = tt.tag_id"

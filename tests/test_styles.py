@@ -173,6 +173,22 @@ async def _main(cfg, rt) -> None:
     assert library.delete_tag(db, tid) is False  # already gone
     print("9. tag management ok (rename, merge-onto-existing, delete + links)")
 
+    # 10. authoritative tag fields (admin editors): set replaces, clearing
+    #     removes, unknown names are created
+    pid2 = db.one("SELECT id FROM prompts LIMIT 1")["id"]
+    library.set_prompt_tags(db, cfg, pid2, ["chiptune", "energetic"])
+    assert library.prompt_tags(db, pid2) == ["chiptune", "energetic"]
+    library.set_prompt_tags(db, cfg, pid2, ["chiptune"])      # replace drops old
+    assert library.prompt_tags(db, pid2) == ["chiptune"]
+    library.set_prompt_tags(db, cfg, pid2, [])                # clear removes all
+    assert library.prompt_tags(db, pid2) == []
+    sid = db.one("SELECT id FROM styles LIMIT 1")["id"]
+    library.set_style_tags(db, cfg, sid, ["pop", "female vocal"])
+    assert library.style_tags(db, sid) == ["female vocal", "pop"]
+    library.set_style_tags(db, cfg, sid, [])
+    assert library.style_tags(db, sid) == []
+    print("10. authoritative tag fields ok (set/replace/clear for prompts + styles)")
+
 
 def run() -> None:
     cfg, tmp = isolated_config()

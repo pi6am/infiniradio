@@ -635,7 +635,7 @@ async def prompt_new(request: Request):
         return _login_redirect()
     return request.app.state.templates.TemplateResponse(
         request, "admin/prompt_edit.html",
-        _ctx(request, p=None, error=None,
+        _ctx(request, p=None, tags="", error=None,
              action="/admin/prompts/edit"))
 
 
@@ -648,12 +648,13 @@ async def prompt_edit(request: Request, prompt_id: int):
         return RedirectResponse("/admin/prompts", status_code=303)
     return request.app.state.templates.TemplateResponse(
         request, "admin/prompt_edit.html",
-        _ctx(request, p=row, error=None,
-             action=f"/admin/prompts/edit/{prompt_id}"))
+        _ctx(request, p=row, tags=", ".join(library.prompt_tags(request.app.state.rt.db,
+                                                                prompt_id)),
+             error=None, action=f"/admin/prompts/edit/{prompt_id}"))
 
 
 def _upsert_prompt(rt, prompt_id: int | None, name: str, style: str, song: str,
-                   cot: str, enabled: bool) -> str | None:
+                   cot: str, enabled: bool, tags: str = "") -> str | None:
     if not name.strip() or not style.strip():
         return "Name and style are required."
     try:
@@ -663,44 +664,51 @@ def _upsert_prompt(rt, prompt_id: int | None, name: str, style: str, song: str,
                 " enabled = ? WHERE id = ?",
                 (name.strip(), style, song, cot, int(enabled), prompt_id))
         else:
-            rt.db.execute(
+            prompt_id = rt.db.execute(
                 "INSERT INTO prompts (name, style_text, song_text, cot_mode, enabled, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
                 (name.strip(), style, song, cot, int(enabled), iso(utcnow())))
     except Exception:
         return "Could not save (duplicate name?)."
+    # The tags field is authoritative (comma/space separated): clearing it
+    # removes links; unknown names are created (curated, admin-entered).
+    tag_names = [t for t in re.split(r"[,\s]+", tags) if t]
+    library.set_prompt_tags(rt.db, rt.cfg, prompt_id, tag_names)
     return None
 
 
 @router.post("/prompts/edit")
 async def prompt_create(request: Request, name: str = Form(""), style: str = Form(""),
                         song: str = Form(""), cot: str = Form("full"),
-                        enabled: bool = Form(False)):
+                        tags: str = Form(""), enabled: bool = Form(False)):
     if not _is_admin(request):
         return _login_redirect()
     rt = request.app.state.rt
-    err = _upsert_prompt(rt, None, name, style, song, cot, enabled)
+    err = _upsert_prompt(rt, None, name, style, song, cot, enabled, tags)
     if err:
         return request.app.state.templates.TemplateResponse(
             request, "admin/prompt_edit.html",
-            _ctx(request, p=None, error=err, action="/admin/prompts/edit"), status_code=400)
+            _ctx(request, p=None, tags=tags, error=err,
+                 action="/admin/prompts/edit"), status_code=400)
     return RedirectResponse("/admin/prompts", status_code=303)
 
 
 @router.post("/prompts/edit/{prompt_id}")
 async def prompt_update(request: Request, prompt_id: int, name: str = Form(""),
                         style: str = Form(""), song: str = Form(""),
-                        cot: str = Form("full"), enabled: bool = Form(False),
+                        cot: str = Form("full"), tags: str = Form(""),
+                        enabled: bool = Form(False),
                         csrf: str = Form("")):
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    err = _upsert_prompt(rt, prompt_id, name, style, song, cot, enabled)
+    err = _upsert_prompt(rt, prompt_id, name, style, song, cot, enabled, tags)
     if err:
         row = _prompt_form(request, prompt_id)
         return request.app.state.templates.TemplateResponse(
             request, "admin/prompt_edit.html",
-            _ctx(request, p=row, error=err, action=f"/admin/prompts/edit/{prompt_id}"),
+            _ctx(request, p=row, tags=tags, error=err,
+                 action=f"/admin/prompts/edit/{prompt_id}"),
             status_code=400)
     return RedirectResponse("/admin/prompts", status_code=303)
 
@@ -851,8 +859,7 @@ def _upsert_style(rt, style_id: int | None, name: str, description: str,
     except Exception:
         return "Could not save (duplicate name?)."
     tag_names = [t for t in re.split(r"[,\s]+", tags) if t]
-    if tag_names:
-        library.apply_style_tags(rt.db, rt.cfg, style_id, tag_names)
+    library.set_style_tags(rt.db, rt.cfg, style_id, tag_names)  # authoritative
     return None
 
 
@@ -867,7 +874,7 @@ async def style_create(request: Request, name: str = Form(""),
     if err:
         return request.app.state.templates.TemplateResponse(
             request, "admin/style_edit.html",
-            _ctx(request, s=None, definition=definition, error=err,
+            _ctx(request, s=None, definition=definition, tags=tags, error=err,
                  action="/admin/styles/edit"), status_code=400)
     return RedirectResponse("/admin/styles", status_code=303)
 
@@ -885,7 +892,7 @@ async def style_update(request: Request, style_id: int, name: str = Form(""),
         row = _style_form(request, style_id)
         return request.app.state.templates.TemplateResponse(
             request, "admin/style_edit.html",
-            _ctx(request, s=row, definition=definition, error=err,
+            _ctx(request, s=row, definition=definition, tags=tags, error=err,
                  action=f"/admin/styles/edit/{style_id}"), status_code=400)
     return RedirectResponse("/admin/styles", status_code=303)
 

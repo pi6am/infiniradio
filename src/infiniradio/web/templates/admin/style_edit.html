@@ -14,8 +14,8 @@
     <input type="text" name="description" value="{{ s.description if s else '' }}"
            placeholder="e.g. fast, energetic J-pop with a strong hook">
 
-    <label>tags (comma or space separated)</label>
-    <input type="text" name="tags" value="{{ s.tags | join(', ') if s and s.tags else '' }}"
+    <label>tags (comma or space separated — authoritative: clearing removes them)</label>
+    <input type="text" name="tags" value="{{ tags if tags is defined else (s.tags | join(', ') if s and s.tags else '') }}"
            placeholder="e.g. pop, electronic">
 
     <label>definition — TOML with [vars] (fixed overrides) and [weighted]

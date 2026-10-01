@@ -9,6 +9,9 @@
     <label>name</label>
     <input type="text" name="name" value="{{ p.name if p else '' }}" required>
 
+    <label>tags (comma or space separated — authoritative: clearing removes them)</label>
+    <input type="text" name="tags" value="{{ tags }}" placeholder="e.g. chiptune, upbeat">
+
     <label>style prompt — describes the music (genre, instruments, mood, tempo…)</label>
     <textarea name="style" required>{{ p.style_text if p else '' }}</textarea>
 
