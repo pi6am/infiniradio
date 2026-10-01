@@ -333,7 +333,20 @@ the true end"""
 
 def run() -> None:
     asyncio.run(_main())
-    print("test_lyrics_engine: ALL PASSED")
+    # The dry-run renders every template with placeholders; a variable kind
+    # the placeholder builder misses (block vars once broke here, masked by
+    # piped/truncated output) must fail loudly in the suites, not in the
+    # field. Both real workflows, full output, exit code checked.
+    import subprocess
+    import sys as _sys
+
+    for wf in ("jp-title-first", "zh-title-first"):
+        r = subprocess.run(
+            [_sys.executable, "-m", "infiniradio.lyrics", "--dry-run", wf],
+            capture_output=True, text=True, cwd=_helpers.REPO_ROOT)
+        assert r.returncode == 0, (wf, r.stderr[-800:])
+        assert r.stdout.count("--- ") >= 14, wf  # 7 stages x prompt + feedback
+    print("test_lyrics_engine: ALL PASSED (+ dry-run regression guard)")
 
 
 if __name__ == "__main__":

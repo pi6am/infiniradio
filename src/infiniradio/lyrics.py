@@ -1119,8 +1119,9 @@ def main() -> None:
         from . import library as library_mod
         llm_tags, _static = library_mod.load_tag_seeds(cfg)
         vocab = llm_tags or ["pop", "rock", "male vocal", "female vocal"]
-        produced = {s.saves for s in spec.stages if s.saves} | {
-            k for s in spec.stages for k, _ in s.extract}
+        produced = ({s.saves for s in spec.stages if s.saves}
+                    | {s.block for s in spec.stages if s.block}
+                    | {k for s in spec.stages for k, _ in s.extract})
         placeholders = {name: f"⟨{name}: output of an earlier stage⟩" for name in produced}
         vars_: dict[str, Any] = {"title": title, **spec.vars, **style_overrides,
                                  **placeholders}
