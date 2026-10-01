@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import random
+from dataclasses import replace as _dc_replace
 from datetime import timedelta
 from typing import Any
 
@@ -335,6 +336,22 @@ def _random_seed() -> int:
 
 
 def build_request(db: DB, job: dict) -> GenRequest:
+    """GenRequest for a queued render job, with all text normalized to LF
+    (browser textareas submit CRLF; some LLM providers emit it; legacy DB
+    rows carry it — YuE2 renders reliably on Unix newlines only, so this
+    last boundary guarantees the generator never sees a CR)."""
+    return _normalize_req(_build_request(db, job))
+
+
+def _normalize_req(req: GenRequest) -> GenRequest:
+    if "\r" in req.lyrics or "\r" in req.style:
+        from .util import normalize_newlines
+        req = _dc_replace(req, lyrics=normalize_newlines(req.lyrics),
+                          style=normalize_newlines(req.style))
+    return req
+
+
+def _build_request(db: DB, job: dict) -> GenRequest:
     parent = None
     if job.get("parent_track_id"):
         parent = db.one("SELECT * FROM tracks WHERE id = ?", (job["parent_track_id"],))

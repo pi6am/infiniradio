@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 
 from .. import dj, janitor, library
 from ..config import RUNTIME_SETTINGS, runtime_get
-from ..util import fmt_duration, human_bytes, iso, utcnow, wilson_score
+from ..util import fmt_duration, human_bytes, iso, normalize_newlines, utcnow, wilson_score
 from ..web.auth import SESSION_COOKIE, LoginThrottle, Sessions, verify_password, stored_password_hash
 from ..web.routes_public import now_playing
 
@@ -573,6 +573,9 @@ async def track_vary_submit(request: Request, track_id: int, mode: str = Form("r
     row = rt.db.one("SELECT * FROM tracks WHERE id = ? AND status = 'ready'", (track_id,))
     if not row:
         return PlainTextResponse("track is not ready", status_code=400)
+    # Browser textareas submit CRLF on every platform; YuE2 wants LF.
+    lyrics = normalize_newlines(lyrics)
+    custom_style = normalize_newlines(custom_style)
     if mode == "recompose":
         if not lyrics.strip():
             return PlainTextResponse("re-compose needs lyrics (edit and fix the"
@@ -705,6 +708,7 @@ async def prompt_edit(request: Request, prompt_id: int):
 
 def _upsert_prompt(rt, prompt_id: int | None, name: str, style: str, song: str,
                    cot: str, enabled: bool, tags: str = "") -> str | None:
+    style, song = normalize_newlines(style), normalize_newlines(song)
     if not name.strip() or not style.strip():
         return "Name and style are required."
     try:
@@ -885,6 +889,7 @@ def _upsert_style(rt, style_id: int | None, name: str, description: str,
 
     if not name.strip():
         return "Name is required."
+    definition = normalize_newlines(definition)
     try:
         vars_, weighted = styles_mod.parse_definition(definition, "definition")
     except styles_mod.StyleError as exc:
@@ -1300,6 +1305,8 @@ async def generate_submit(request: Request, prompt_id: int = Form(0),
         if workflow is None or rt.llm is None:
             return PlainTextResponse("no such lyrics workflow (or LLM disabled)",
                                      status_code=400)
+    custom_style = normalize_newlines(custom_style)
+    custom_song = normalize_newlines(custom_song)
     if workflow is not None:
         # No explicit style chosen -> let the DJ's weighted pick decide.
         style = None

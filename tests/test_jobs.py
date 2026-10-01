@@ -160,6 +160,28 @@ async def _main(cfg, rt) -> None:
     assert req5.abc == track["abc_text"] and req5.parent_track_id == track_id
     print("re-compose: abc=None + edited lyrics + lineage; variation unchanged")
 
+    # line-ending normalization at every boundary: the vary form submits
+    # CRLF (browsers always do), the LLM emits CRLF, legacy DB rows carry
+    # it — nothing may reach the generator with a CR
+    crlf_lyrics = fixed_lyrics.replace("\n", "\r\n")
+    assert "\r" in crlf_lyrics
+    jid6 = dj.enqueue_job(db, parent_track_id=track_id, recompose=True,
+                          lyrics=crlf_lyrics, seed=7)
+    req6 = dj.build_request(db, db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid6,)))
+    assert "\r" not in req6.lyrics and req6.lyrics == fixed_lyrics
+    # legacy CR content already stored in a job's outputs is caught too
+    db.execute("UPDATE generation_jobs SET progress = ? WHERE id = ?",
+               (json.dumps({"outputs": {"title": "T", "style": "s\r\nx",
+                                        "lyrics": crlf_lyrics}}), jid6))
+    req6b = dj.build_request(db, db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid6,)))
+    assert "\r" not in req6b.lyrics and "\r" not in req6b.style
+    # the LLM reception boundary (openai_compat._parse)
+    from infiniradio.llm.openai_compat import OpenAICompatClient
+    reply = OpenAICompatClient._parse({"choices": [{"message": {"content": "a\r\nb\rc"},
+                                                    "finish_reason": "stop"}]})
+    assert reply.content == "a\nb\nc"
+    print("normalization: form/LLM/legacy boundaries all deliver pure LF")
+
     # failure persists completed stages; retry resumes, not restarts
     jid3 = dj.enqueue_job(db, workflow_id="jp-title-first")
     failing = RT(cfg, db, rt.generator, MockLLMClient(fail_first={"tags": 2}), rt.workflows)

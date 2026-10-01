@@ -74,6 +74,21 @@ def setup_logging(verbose: bool = False) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
+def normalize_newlines(text: str) -> str:
+    """CRLF (and lone CR) -> LF, at every text boundary.
+
+    Two proven sources of stray CR: browsers submit <textarea> values with
+    CRLF on every platform (the HTML spec's submission normalization — not
+    a Windows paste, a browser one), and some LLM providers emit CRLF in
+    completions. YuE2's conditioning derailed on CR-mangled lyrics — the
+    same lyrics, style and seed rendered correctly with LF and scrambled
+    with CRLF (matched pair, ComfyUI history) — so all submitted and
+    received text is normalized to Unix newlines before it is stored or
+    sent on.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def lock_data_dir(data_dir: Path) -> None:
     """Take an exclusive, process-lifetime lock on the data directory.
 

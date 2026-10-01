@@ -111,16 +111,17 @@ class OpenAICompatClient(LLMClient):
         if not choices or not isinstance(choices[0], dict):
             raise LLMError(f"malformed completion reply: {str(data)[:400]}")
         content = (choices[0].get("message") or {}).get("content")
-        finish_reason = str(choices[0].get("finish_reason") or "")
-        # Case-insensitive: servers report "length" as "LENGTH" (or any
-        # casing) — missing this let visually-truncated songs through as
-        # complete when the engine trusted a strict comparison.
-        truncated = finish_reason.strip().lower() == "length"
+        truncated = finish_reason.strip().lower() == "length" if (
+            finish_reason := str(choices[0].get("finish_reason") or "")) else False
         # An empty reply is normally fatal; an empty TRUNCATED one may just
         # mean the whole budget went to thinking — the engine's continuation
         # can still recover it.
         if not isinstance(content, str) or (not content.strip() and not truncated):
             raise LLMError(f"empty completion content: {str(data)[:400]}")
+        # Some providers emit CRLF; normalize at reception so everything
+        # downstream (snapshots, variables, YuE2) only ever sees LF.
+        from ..util import normalize_newlines
+        content = normalize_newlines(content)
         usage = data.get("usage") or {}
         return Reply(content=content, model=str(data.get("model", "")),
                      truncated=truncated, finish_reason=finish_reason,
