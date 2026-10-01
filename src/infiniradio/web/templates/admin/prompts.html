@@ -53,7 +53,8 @@
     {% for w in workflows %}
     <tr>
       <td title="{{ w.description }}">{{ w.name }}</td>
-      <td>{% if w.enabled %}<span class="pill ok">on</span>
+      <td>{% if w.abstract %}<span class="pill">base</span>
+        {% elif w.enabled %}<span class="pill ok">on</span>
         {% elif not w.file_enabled %}<span class="pill">off · file</span>
         {% else %}<span class="pill">off</span>{% endif %}</td>
       <td class="muted">{{ w.stages }}</td>
@@ -62,7 +63,8 @@
       <td class="muted">{{ w.weight if w.weight is not none else '—' }}
         <span title="selection weight">(avg {{ w.avg_score }} · {{ w.aired }} aired)</span></td>
       <td>
-        {% if w.file_enabled %}
+        {% if w.abstract %}<span class="muted" title="inheritance base — never commissioned; children inherit its stages, params and templates">base</span>
+        {% elif w.file_enabled %}
         <form class="inline" method="post" action="/admin/workflows/{{ w.name }}/toggle">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <button type="submit">{{ 'disable' if w.enabled else 'enable' }}</button>

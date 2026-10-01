@@ -231,13 +231,14 @@ def pick_generator(rt) -> tuple[str, object] | None:
 
 
 def enabled_workflows(rt) -> list:
-    """Workflows selectable right now: enabled in their workflow.toml AND
-    not switched off from the admin panel. The admin override lives in the
-    settings table, so disabling a workflow on a running server is one
-    click — no file edits, no restart (queued jobs still finish)."""
+    """Workflows selectable right now: enabled in their workflow.toml, not
+    abstract bases, and not switched off from the admin panel. The admin
+    override lives in the settings table, so disabling a workflow on a
+    running server is one click — no file edits, no restart (queued jobs
+    still finish)."""
     disabled = set(rt.db.get_setting("workflows_disabled") or [])
     return [w for w in getattr(rt, "workflows", {}).values()
-            if w.enabled and w.name not in disabled]
+            if w.enabled and not w.abstract and w.name not in disabled]
 
 
 def variation_parent(db: DB, cfg: Config) -> dict | None:

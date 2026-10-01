@@ -635,9 +635,10 @@ async def prompts_page(request: Request):
             (w.name,))["n"]
         on = w.enabled and w.name not in admin_off
         weight = (dj.workflow_weight(rt.db, rt.cfg, w.name)
-                  if rt.llm is not None and on else None)
+                  if rt.llm is not None and on and not w.abstract else None)
         workflows.append({"name": w.name, "description": w.description,
                           "enabled": on, "file_enabled": w.enabled,
+                          "abstract": w.abstract,
                           "stages": len(w.stages),
                           "tags": list(w.static_tags), "tracks": tracks,
                           "aired": stats["aired"],
@@ -657,8 +658,12 @@ async def workflow_toggle(request: Request, workflow_id: str, csrf: str = Form("
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    if workflow_id not in getattr(rt, "workflows", {}):
+    spec = getattr(rt, "workflows", {}).get(workflow_id)
+    if spec is None:
         return PlainTextResponse("no such workflow", status_code=404)
+    if spec.abstract:
+        return PlainTextResponse("abstract bases are never commissioned — nothing to toggle",
+                                 status_code=400)
     disabled = list(rt.db.get_setting("workflows_disabled") or [])
     if workflow_id in disabled:
         disabled.remove(workflow_id)

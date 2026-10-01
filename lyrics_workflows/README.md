@@ -1,7 +1,7 @@
 # Lyrics workflows
 
-One directory per workflow: a `workflow.toml` control-flow file plus one
-Jinja template per LLM prompt. Everything content-related lives here; the
+One directory per workflow: a `workflow.toml` control-flow file plus Jinja
+templates for the LLM prompts. Everything content-related lives here; the
 engine (`src/infiniradio/lyrics.py`) is generic. Workflows are loaded and
 validated once at server startup — a broken workflow is a startup error,
 never a silent skip — and template/control-flow changes need a restart
@@ -9,18 +9,23 @@ never a silent skip — and template/control-flow changes need a restart
 panel (prompts page) toggles workflows live via a settings-table override
 — no file edits, no restart; queued jobs still finish. `dj.lyrics_share`
 sets what fraction of fresh commissions use a lyrics workflow at all.
+Workflows can share a definition through **inheritance** (`base`) — see
+the section at the bottom.
 
 ```
 lyrics_workflows/
-  jp-title-first/
-    workflow.toml        control flow: stages, gates, retries, outputs
-    brainstorm.j2.md     one template per stage prompt
+  title-first/            # abstract base: the shared pipeline + all templates
+    workflow.toml         # abstract = true; stages, gates, tuning
+    brainstorm.j2.md      # one template per stage prompt
     foreign_lyrics.j2.md
     translate.j2.md
+    name.j2.md
     style.j2.md
     refine.j2.md
     tags.j2.md
-    feedback.j2.md       retry-feedback template (branches on failures)
+    feedback.j2.md        # retry-feedback template (branches on failures)
+  jp-title-first/         # three-line child: name, description, base
+  zh-title-first/         # child + a [params] language override
 ```
 
 ## workflow.toml
@@ -254,11 +259,60 @@ python -m infiniradio.lyrics --run jp-title-first --style jpop-anime --seed 7
 (the CLI reads seed files; styles created in the admin panel live in the
 database and are not visible to it.)
 
-## Future: sharing between variants
+## Inheritance (`base`)
 
-`zh-title-first` is currently a full copy of `jp-title-first` with
-different `[params]`. When a third variant appears, the plan is
-`base = "title-first"` inheritance: stages/params deep-merge (child wins)
-and template lookup falls through to the base directory (the engine
-already uses a Jinja `ChoiceLoader`, so this is a merge step over specs,
-not a redesign).
+Workflows share a common definition through a base: a directory with
+`abstract = true` in its workflow.toml that is loaded and validated like
+any workflow but **never commissioned** (the DJ, the Generate page and the
+audition runs only ever select concrete workflows; the admin workflows
+table shows bases with a `base` pill). The shipped example: everything
+lives in `title-first/` — the full stage pipeline, gates, tuning and all
+nine templates — while `jp-title-first/` is three lines (`name`,
+`description`, `base = "title-first"`) and `zh-title-first/` adds only a
+`[params]` override.
+
+```toml
+# zh-title-first/workflow.toml — the complete file
+name = "zh-title-first"
+description = "…Chinese draft…"
+base = "title-first"
+[params]
+language = "Chinese"
+script_note = "using simplified Chinese characters"
+```
+
+Merge semantics (child wins, applied recursively along the base chain,
+cycles and typos rejected at startup):
+
+| Part | Behavior |
+|---|---|
+| scalars (`description`, `seed_title`, `styled`, …) | child's value if present, else base's |
+| `name`, `enabled`, `abstract` | always the child's own (never inherited) |
+| `[params]`, `[vars]`, `[output]` | per-key merge, child wins |
+| `tags` | child's list replaces if present |
+| `[[stage]]` | merged **by id**: child fields override per-field (`gate`/`extract` tables replace wholesale), position inherited; a new id inserts after the stage named by `after` (else appends) |
+| `remove_stages = [...]` | deletes stages by id (workflow-level key — declare it *before* any `[[stage]]`, TOML assigns trailing keys to the last table) |
+| templates | search path child dir → ancestors; a child file shadows a base file by name |
+
+A worked example — an English-native workflow that skips the
+foreign-language laundering stages:
+
+```toml
+# en-native/workflow.toml
+name = "en-native"
+base = "title-first"
+remove_stages = ["foreign_lyrics", "translate"]
+[[stage]]
+id = "write"
+after = "brainstorm"          # takes the translate slot in the flow
+template = "write.j2.md"     # the only file this workflow ships
+block = "lyrics_en"
+[stage.gate]
+max_chars = 6000
+any_of = ['\[Verse\]', '\[Chorus\]', '\[Intro\]', '\[Outro\]']
+```
+
+The `thread = "continue"` stages (name, style) work unchanged: "continue"
+is positional (it joins the previous stage's thread), not name-bound.
+Inheritance resolves entirely at load time — a resolved child is
+indistinguishable from a hand-written workflow.

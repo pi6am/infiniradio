@@ -73,10 +73,11 @@ RESERVED_VARS = frozenset({"title", "params", "tags", "failures", "failed",
                            "extract_failed", "attempt", "previous"})
 
 _WORKFLOW_KEYS = {"name", "description", "enabled", "tags", "seed_title",
-                  "params", "vars", "styled", "output", "stage"}
+                  "params", "vars", "styled", "output", "stage",
+                  "abstract", "base", "remove_stages"}
 _STAGE_KEYS = {"id", "template", "saves", "block", "extract", "thread",
                "max_attempts", "feedback_template", "model", "temperature",
-               "max_tokens", "reasoning_effort", "extra", "gate"}
+               "max_tokens", "reasoning_effort", "extra", "gate", "after"}
 _GATE_KEYS = {"max_chars", "min_chars", "all_of", "any_of", "forbidden"}
 _OUTPUT_KEYS = {"title", "style", "lyrics", "tags", "max_tags"}
 
@@ -168,6 +169,10 @@ class WorkflowSpec:
                                      # style-override variables; templates read
                                      # them at top level ({{ style_guide }})
     styled: bool = False             # the DJ picks a style for this workflow
+    abstract: bool = False           # a base, not a commissionable workflow:
+                                     # loaded, validated, inheritable — but the
+                                     # DJ, the Generate page and the CLI runs
+                                     # never select it
 
 
 # ------------------------------------------------------------------ traces
@@ -227,12 +232,14 @@ class WorkflowResult:
 
 # ------------------------------------------------------------------ loading
 
-def _jinja_env(directory: Path) -> jinja2.Environment:
-    # ChoiceLoader so a future `base = ...` workflow-inheritance scheme is a
-    # loader search path, not a redesign. Text output: no autoescaping;
-    # strict_undefined so a typo'd variable fails the render, not silently "".
+def _jinja_env(directories: list[Path]) -> jinja2.Environment:
+    # ChoiceLoader over the child dir then its ancestor dirs: workflow
+    # inheritance resolves a child's template first, a base's as fallback
+    # (a child file shadows a base file by name). Text output: no
+    # autoescaping; strict_undefined so a typo'd variable fails the render,
+    # not silently "".
     return jinja2.Environment(
-        loader=jinja2.ChoiceLoader([jinja2.FileSystemLoader(str(directory))]),
+        loader=jinja2.ChoiceLoader([jinja2.FileSystemLoader(str(d)) for d in directories]),
         autoescape=False,
         undefined=jinja2.StrictUndefined,
         keep_trailing_newline=True,
@@ -272,6 +279,7 @@ def _var_name(name: str, where: str) -> str:
 
 
 def _parse_stage(data: dict, where: str) -> StageSpec:
+    data = {k: v for k, v in data.items() if k != "after"}  # consumed at merge
     _only_keys(data, _STAGE_KEYS, where)
     stage_id = str(data.get("id") or "").strip()
     if not stage_id.isidentifier():
@@ -340,7 +348,10 @@ def _parse_stage_extra(data: Any, where: str) -> dict[str, Any]:
     return dict(data)
 
 
-def load_workflow(directory: Path) -> WorkflowSpec:
+def _read_workflow_dir(directory: Path) -> dict:
+    """Parse one workflow dir's TOML and check its keys and name (the raw
+    material for inheritance merging — validation of the RESOLVED spec
+    happens in _build_spec)."""
     wf_path = directory / "workflow.toml"
     where = str(wf_path)
     try:
@@ -348,12 +359,121 @@ def load_workflow(directory: Path) -> WorkflowSpec:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise WorkflowError(f"{where}: cannot read workflow: {exc}") from exc
     _only_keys(data, _WORKFLOW_KEYS, where)
-
     name = str(data.get("name") or "").strip()
     if name != directory.name:
         raise WorkflowError(
             f"{where}: name {name!r} must match the directory name "
             f"{directory.name!r} (copying a workflow? rename both)")
+    return data
+
+
+def _merge_stages(base_stages: list, child_stages: list, remove: list,
+                  where: str) -> list:
+    """Stage-list merge: child [[stage]] entries with a base id merge
+    per-field (a child-specified gate/extract replaces the base's wholesale;
+    the position is inherited), new ids insert after the stage named by
+    `after` (else append), and remove_stages deletes by id. Everything is
+    validated here so typos fail at startup."""
+    order: list[str] = []
+    by_id: dict[str, dict] = {}
+    for s in base_stages:
+        by_id[s["id"]] = dict(s)
+        order.append(s["id"])
+    seen_child: set[str] = set()
+    for cs in child_stages:
+        cid = str(cs.get("id") or "")
+        if cid in seen_child:
+            raise WorkflowError(f"{where}: duplicate stage id {cid!r}")
+        seen_child.add(cid)
+        if cid in by_id:
+            if "after" in cs:
+                raise WorkflowError(
+                    f"{where}: stage {cid!r} overrides a base stage — position is "
+                    "inherited, 'after' is only for new stages")
+            merged_stage = dict(by_id[cid])
+            merged_stage.update(cs)
+            by_id[cid] = merged_stage
+        else:
+            after = cs.get("after")
+            entry = {k: v for k, v in cs.items() if k != "after"}
+            by_id[cid] = entry
+            if after is None:
+                order.append(cid)
+            else:
+                if after not in by_id:
+                    raise WorkflowError(
+                        f"{where}: stage {cid!r}: after = {after!r} names no known "
+                        "stage (base stages and earlier child stages only)")
+                order.insert(order.index(str(after)) + 1, cid)
+    for rid in remove:
+        if str(rid) not in by_id:
+            raise WorkflowError(
+                f"{where}: remove_stages names unknown stage {rid!r}")
+    return [by_id[i] for i in order if i not in set(str(r) for r in remove)]
+
+
+def _merge_raw(base: dict, child: dict) -> dict:
+    """Workflow-level merge, child wins: scalars per-field, tables
+    (params/vars/output) per-key, tags list replaces, stages by id.
+    name/enabled/abstract are the child's own (never inherited); base and
+    remove_stages are consumed by the merge."""
+    merged = dict(base)
+    for key in ("description", "seed_title", "styled"):
+        if key in child:
+            merged[key] = child[key]
+    merged["name"] = child.get("name")
+    merged["enabled"] = bool(child.get("enabled", True))
+    merged["abstract"] = bool(child.get("abstract", False))
+    if "tags" in child:
+        merged["tags"] = child["tags"]
+    for key in ("params", "vars", "output"):
+        if isinstance(child.get(key), dict):
+            table = dict(merged.get(key) or {})
+            table.update(child[key])
+            merged[key] = table
+    merged["stage"] = _merge_stages(list(base.get("stage") or []),
+                                    list(child.get("stage") or []),
+                                    list(child.get("remove_stages") or []),
+                                    where=str(child.get("_where") or "workflow merge"))
+    merged.pop("base", None)
+    merged.pop("remove_stages", None)
+    return merged
+
+
+def _resolve_raw(name: str, raw_by_name: dict[str, tuple[Path, dict]],
+                 seen: frozenset[str]) -> tuple[dict, list[Path]]:
+    """Resolve a workflow's base chain into one merged raw spec plus the
+    template search path (child dir first, then each ancestor)."""
+    directory, data = raw_by_name[name]
+    base = data.get("base")
+    if not base:
+        # Standalone workflow: still normalize stage order/removals so
+        # after/remove_stages work uniformly without inheritance.
+        out = dict(data)
+        out["stage"] = _merge_stages([], list(data.get("stage") or []),
+                                     list(data.get("remove_stages") or []),
+                                     where=str(directory / "workflow.toml"))
+        out.pop("remove_stages", None)
+        return out, [directory]
+    if name in seen:
+        chain = " -> ".join(list(seen) + [name])
+        raise WorkflowError(f"workflow base cycle: {chain}")
+    if base not in raw_by_name:
+        raise WorkflowError(
+            f"{directory / 'workflow.toml'}: base = {base!r} names no loaded "
+            "workflow (check the directory name)")
+    base_data, base_dirs = _resolve_raw(base, raw_by_name, seen | {name})
+    child = dict(data)
+    child["_where"] = str(directory / "workflow.toml")  # for merge error messages
+    merged = _merge_raw(base_data, child)
+    return merged, [directory] + base_dirs
+
+
+def _build_spec(directory: Path, data: dict, chain: list[Path]) -> WorkflowSpec:
+    """Validate and build a RESOLVED workflow spec (the merged result of
+    inheritance, or a standalone workflow)."""
+    where = str(directory / "workflow.toml")
+    name = str(data.get("name") or "").strip()
 
     stages_data = data.get("stage") or []
     if not stages_data:
@@ -394,7 +514,7 @@ def load_workflow(directory: Path) -> WorkflowSpec:
     if output.max_tags is not None and output.max_tags < 1:
         raise WorkflowError(f"{where}: output.max_tags must be >= 1")
 
-    env = _jinja_env(directory)
+    env = _jinja_env(chain)
     vars_defaults: dict[str, str] = {}
     for key, value in (data.get("vars") or {}).items():
         if not str(key).isidentifier() or not str(key)[0].islower():
@@ -434,24 +554,37 @@ def load_workflow(directory: Path) -> WorkflowSpec:
         # keeps its natural rhyme discipline). Same naming rules as styles.
         vars=vars_defaults,
         styled=bool(data.get("styled", False)),
+        abstract=bool(data.get("abstract", False)),
     )
 
 
 def load_workflows(cfg: Config) -> dict[str, WorkflowSpec]:
-    """Load every workflow under lyrics.workflows_dir (validated, ordered)."""
+    """Load every workflow under lyrics.workflows_dir (validated, ordered).
+
+    Inheritance (base = "...") is resolved here, load-time only: children
+    deep-merge over their base chain and the result is validated like any
+    hand-written workflow — the execution engine never knows. Abstract
+    workflows (bases) load and validate but are never commissioned.
+    """
     directory = cfg.path("lyrics.workflows_dir")
     if not directory.is_dir():
         log.info("no lyrics workflows directory at %s — lyrics generation off", directory)
         return {}
-    specs: dict[str, WorkflowSpec] = {}
+    raw: dict[str, tuple[Path, dict]] = {}
     for sub in sorted(directory.iterdir()):
         if not sub.is_dir() or not (sub / "workflow.toml").is_file():
-            continue  # plain files and template-share dirs are not workflows
-        spec = load_workflow(sub)
-        specs[spec.name] = spec
-    enabled = sum(s.enabled for s in specs.values())
-    log.info("loaded %d lyrics workflow(s) from %s (%d enabled)",
-             len(specs), directory, enabled)
+            continue  # plain files are not workflows
+        data = _read_workflow_dir(sub)
+        raw[str(data["name"])] = (sub, data)
+    specs: dict[str, WorkflowSpec] = {}
+    for name, (sub, _data) in raw.items():
+        merged, chain = _resolve_raw(name, raw, frozenset())
+        merged.pop("_where", None)
+        specs[name] = _build_spec(sub, merged, chain)
+    concrete = sum(not s.abstract for s in specs.values())
+    enabled = sum(s.enabled and not s.abstract for s in specs.values())
+    log.info("loaded %d lyrics workflow(s) from %s (%d enabled, %d abstract base(s))",
+             len(specs), directory, enabled, len(specs) - concrete)
     return specs
 
 
@@ -948,7 +1081,9 @@ def main() -> None:
     workflows = load_workflows(cfg)
     if args.list or (not args.validate and not args.dry_run and not args.run):
         for spec in workflows.values():
-            print(f"{'on ' if spec.enabled else 'off'}  {spec.name}: "
+            state = ("base" if spec.abstract
+                     else "on " if spec.enabled else "off")
+            print(f"{state}  {spec.name}: "
                   f"{spec.description}  [{len(spec.stages)} stages, tags: "
                   f"{', '.join(spec.static_tags) or '—'}]")
         return
