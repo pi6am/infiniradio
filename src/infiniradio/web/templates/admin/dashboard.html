@@ -10,7 +10,7 @@
     · feeder: {% if feeder_track %}writing “{{ feeder_track }}” ({{ queued_s }}s queued){% else %}idle{% endif %}</span>
   <form method="post" action="/admin/skip" class="inline" style="margin-left:12px">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button type="submit">⏭ skip current (flushes buffer)</button>
+    <button type="submit">⏭ skip current</button>
   </form>
   {% if playback_paused %}
   <form method="post" action="/admin/playback/resume" class="inline" style="margin-left:8px">

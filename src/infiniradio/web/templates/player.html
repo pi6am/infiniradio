@@ -94,13 +94,13 @@
       elMeta.textContent = metaLine(cur);
       elVotes.replaceChildren(voteBox(cur));
     } else if (sched && sched.playback_paused) {
-      elTitle.textContent = '\u23f8 station paused \u2014 silence on air\u2026';
+      elTitle.textContent = '\u23f8 station paused\u2026';
       elTitle.className = 'muted';
       elTitle.style.fontSize = '';
       elMeta.textContent = '';
       elVotes.replaceChildren();
     } else {
-      elTitle.textContent = 'warming up — the stream starts with the first generated track\u2026';
+      elTitle.textContent = 'warming up\u2026';
       elTitle.className = 'muted';
       elTitle.style.fontSize = '';
       elMeta.textContent = '';
@@ -228,22 +228,37 @@
     return m ? m[1] : null;
   }
 
+  // Adopt the stream generation's epoch from any segment URL. Returns true
+  // when it CHANGED — a new encoder life (server restart, or an encoder
+  // restart after the process died); each life restarts its media sequence
+  // at 0, so the epoch in the URL is the reliable generation signal.
+  // (Skips and pause cuts no longer appear here: they cut in place on the
+  // same timeline, so clients never see a generation change for them.)
+  function onEpoch(ep) {
+    if (ep === null || ep === streamEpoch) return false;
+    const known = streamEpoch !== null;
+    streamEpoch = ep;
+    return known;
+  }
+
+  // Switch to a factory-fresh session on a generation change: the old
+  // session's fragment history and timeline alignment span the seam and
+  // would step back into old-generation audio (segments stay
+  // browser-cached for minutes).
+  function newLifeResync() {
+    fetchSchedule();
+    rebuildStream();
+  }
+
   function onFrag(frag) {
-    const ep = fragEpoch(frag && frag.url);
-    if (ep !== null && streamEpoch === null) streamEpoch = ep;
+    const newLife = onEpoch(fragEpoch(frag && frag.url));
     const pdt = parsePdt(frag);
     const head = playingPdt();
     const jumpedBack = pdt != null && head != null && pdt + 30000 < head;
-    if ((ep !== null && streamEpoch !== null && ep !== streamEpoch) || jumpedBack) {
-      // A new encoder life (server restart or skip/pause flush). Each life
-      // restarts its media sequence at 0, so the URL epoch is the reliable
-      // signal; a large backward PDT jump is the fallback. Switch to a
-      // factory-fresh session: the old one's fragment history and timeline
-      // alignment span the generation seam and would step back into
-      // old-generation audio (segments stay browser-cached for minutes).
-      if (ep !== null) streamEpoch = ep;
-      fetchSchedule();
-      rebuildStream();
+    if (newLife || jumpedBack) {
+      // URL epoch is the primary signal; a large backward PDT jump is the
+      // fallback for epoch-less playlists.
+      newLifeResync();
       return;
     }
     anchor = pdt == null ? null : { pdt: pdt, at: Date.now() };
@@ -302,6 +317,18 @@
     hls.on(Hls.Events.FRAG_CHANGED, function (_e, data) {
       fatalCycles = 0;
       onFrag(data && data.frag);
+    });
+    // A generation change must be caught the moment the PLAYLIST shows it,
+    // not when a new-life fragment plays (FRAG_CHANGED above): the old
+    // session cannot reconcile the new life's reset media sequence and PTS
+    // timeline (no EXT-X-DISCONTINUITY exists between encoder lives), so it
+    // stalls without ever playing a new-life fragment — listeners used to
+    // sit in dead air until the 45s stall watchdog rebuilt them. The
+    // manifest is polled every few seconds, so this resyncs within one.
+    hls.on(Hls.Events.LEVEL_UPDATED, function (_e, data) {
+      const frags = (data && data.details && data.details.fragments) || [];
+      if (onEpoch(fragEpoch(frags.length ? frags[frags.length - 1].url : null)))
+        newLifeResync();
     });
     hls.on(Hls.Events.ERROR, function (_e, data) {
       if (!data.fatal) return;

@@ -408,7 +408,9 @@ async def queue_remove(request: Request, qid: int, csrf: str = Form("")):
 
 @router.post("/skip")
 async def skip_current(request: Request, csrf: str = Form("")):
-    """Stop feeding the current track and flush the buffered audio."""
+    """Cut the current track in place: the encoder timeline continues, the
+    next pick follows gaplessly, and listeners hear the switch after their
+    live latency (their in-flight buffer of the old track plays out)."""
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
@@ -440,13 +442,14 @@ async def generation_resume(request: Request, csrf: str = Form("")):
 
 @router.post("/playback/pause")
 async def playback_pause(request: Request, csrf: str = Form("")):
-    """Cut to silence now and stay silent until resumed.
+    """Cut to silence and stay silent until resumed.
 
     Setting the flag alone would only take effect at the next track
-    boundary (and up to MAX_LEAD_S of audio is already buffered), so we
-    also skip the current track out of the buffer — the same flush a
-    manual skip performs. The encoder keeps running; listeners hear
-    silence instead of a stalled stream and stay connected.
+    boundary, so we also cut the current track in place — the same cut a
+    manual skip performs. The cut is graceful: listeners hear the current
+    track's in-flight tail (at most their live latency, a few segments) and
+    then silence; the encoder and its timeline keep running the whole time,
+    so clients stay connected with nothing to resync.
     """
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)

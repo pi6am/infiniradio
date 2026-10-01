@@ -28,6 +28,8 @@ MODULES = [
     "test_deletion",        # deletion buffer + hold
     "test_llm_status",      # bounded + cached LLM health ping
     "test_app",             # app factory: startup validation, routes
+    "test_encoder",         # HLS generations: epoch naming, flush playlist bridge
+    "test_feeder",          # in-place skip: same-timeline cut, played_s clamp
 ]
 
 

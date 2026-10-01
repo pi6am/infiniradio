@@ -7,11 +7,12 @@ immutable within the window and publicly cacheable, which is what makes the
 
 Every encoder life is a self-contained "generation": the fMP4 init segment
 and segment filenames carry the epoch (a URL must never serve bytes from
-two generations — segments are publicly cached), the previous life's files
-are purged on start, and each life's playlist starts its media sequence at
-0 like any fresh stream (huge sequence bases poison players' duration
+two generations — segments are publicly cached), the previous life's
+segments are purged on start (its live.m3u8 is kept as a bridge until the
+new life overwrites it), and each life's playlist starts its media sequence
+at 0 like any fresh stream (huge sequence bases poison players' duration
 math). Sequence regression across lives is safe because clients rebuild
-their playback session when the URL epoch changes; stitching lives
+their playback session when the playlist shows a new epoch; stitching lives
 together with append_list is what stalled surviving players across server
 restarts.
 """
@@ -91,14 +92,19 @@ class Encoder:
         log.info("HLS encoder started (pid %s, epoch %d)", self.proc.pid, self.epoch)
 
     def _purge_stale(self) -> None:
-        """Remove the previous encoder life's output.
+        """Remove the previous encoder life's segments and init segments.
 
-        Each life writes a fresh playlist; files from an older life would
-        linger forever (delete_segments only manages the current window).
-        Clients still holding the old playlist see brief 404s and resync
-        via the new one.
+        Files from an older life would linger forever (delete_segments only
+        manages the current window). The old live.m3u8 is deliberately KEPT:
+        the new life overwrites it (same filename) once its first segment is
+        cut, so deleting it first would open a window where every client's
+        manifest poll 404s and burns hls.js's level-retry budget into fatal
+        errors. A stale-but-live manifest bridges the restart instead — its
+        segments 404 briefly (retryable, and moot once players see the new
+        generation's playlist and switch), and native-HLS clients with no
+        event hooks keep polling valid bytes throughout.
         """
-        for pattern in ("live*.m3u8", "seg*.m4s", "init*.mp4", "*.tmp"):
+        for pattern in ("seg*.m4s", "init*.mp4", "*.tmp"):
             for p in self.hls_dir.glob(pattern):
                 try:
                     p.unlink()

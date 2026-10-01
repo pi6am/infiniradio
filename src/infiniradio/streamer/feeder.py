@@ -8,9 +8,16 @@ reports against the latency hint.
 
 If the DJ has nothing to offer, real silence is written so the stream never
 dies. The admin-panel playback pause uses the same mechanism: the current
-track is skipped out of the buffer (encoder restart, players resync within
-seconds) and deliberate silence follows until playback is resumed — the
-encoder keeps running the whole time, so listeners stay connected.
+track is cut in place and deliberate silence follows until playback is
+resumed.
+
+Skips and pause cuts never restart the encoder: a skip is just an early
+end-of-track, the next material continues on the same program timeline, and
+listeners hear the old track's remaining in-flight audio (at most their
+live latency, a few segments) give way to whatever comes next — no dead
+air, no new stream generation, nothing for clients to resync. The airing's
+play_log row stays, clamped to what actually aired so now-playing hands
+over at the cut.
 
 A restart resumes the airing it interrupted: the position is predicted from
 the airing's start time and the track duration (downtime-worth of song is
@@ -101,7 +108,13 @@ class Feeder:
         return {r["track_id"] for r in self.rt.db.query("SELECT track_id FROM play_queue")}
 
     def request_skip(self) -> bool:
-        """Skip the track currently being fed (flushes buffered audio)."""
+        """Cut the track currently being fed, in place.
+
+        The encoder keeps running: the cut lands on the same program
+        timeline, listeners hear it after their live latency (their
+        in-flight buffer of the old track plays out first), and the next
+        pick continues gaplessly — no flush, no restart, no client resync.
+        """
         if self.current_track_id is None:
             return False
         self.skip_requested = True
@@ -146,9 +159,8 @@ class Feeder:
                     self._pending_resume = None
                     log.info("resuming track %s (%s) at %.1fs after restart",
                              track["id"], track["title"], offset)
-                    if await self._feed_track(track, resume_offset_s=offset,
-                                              resume_row_id=row_id):
-                        await self._flush_after_skip(track)
+                    await self._feed_track(track, resume_offset_s=offset,
+                                           resume_row_id=row_id)
                     continue
                 track = self._pop_queue() or dj.pick_next(
                     self.rt.db, self.cfg,
@@ -158,9 +170,7 @@ class Feeder:
                     await self._feed_silence()
                     continue
                 self._silence_since = None
-                skipped = await self._feed_track(track)
-                if skipped:
-                    await self._flush_after_skip(track)
+                await self._feed_track(track)
             except EncoderDied:
                 await self.encoder.restart()
             except asyncio.CancelledError:
@@ -168,19 +178,6 @@ class Feeder:
             except Exception:
                 log.exception("feeder iteration failed; cooling down")
                 await asyncio.sleep(2)
-
-    async def _flush_after_skip(self, track: dict) -> None:
-        # The flushed audio never reached listeners as scheduled; drop its
-        # play_log entry so now-playing stays truthful, and flush everything
-        # already buffered by restarting the encoder (players resync quickly).
-        self.rt.db.execute(
-            "DELETE FROM play_log WHERE id ="
-            " (SELECT MAX(id) FROM play_log WHERE track_id = ?)",
-            (track["id"],),
-        )
-        log.info("flushing buffer after skip (encoder restart)")
-        await self.encoder.restart()
-
 
     async def _pace(self) -> None:
         """Throttle writes so we stay at most MAX_LEAD_S ahead of realtime."""
@@ -225,6 +222,11 @@ class Feeder:
 
         airtime = iso(utcnow())  # replaced below with queue-aware estimate
         self.current_track_id = track["id"]
+        # Where this airing starts on the encoder's program timeline (what
+        # mark_aired records as prog_offset); needed again at the end to
+        # clamp an in-place-skipped airing's window to what actually aired.
+        start_prog = self.encoder.program_seconds()
+        row_id: int | None = resume_row_id
         seek = ["-ss", f"{resume_offset_s:.3f}"] if resume_offset_s > 0 else []
         proc = await asyncio.create_subprocess_exec(
             self.cfg.get("stream.ffmpeg_path", "ffmpeg"),
@@ -255,9 +257,9 @@ class Feeder:
                 if resume_row_id is not None:
                     duration = track["duration_s"] or 0.0
                     played_s = max(0.0, duration - resume_offset_s)
-                library.mark_aired(
+                row_id = library.mark_aired(
                     self.rt.db, track["id"], airtime,
-                    prog_offset=self.encoder.program_seconds(),
+                    prog_offset=start_prog,
                     epoch=self.encoder.epoch,
                     played_s=played_s, resume_row_id=resume_row_id,
                 )
@@ -275,6 +277,17 @@ class Feeder:
                       err.decode(errors="replace").strip())
         self.current_track_id = None
         if skipped:
+            # In-place cut: the encoder and its timeline continue, so every
+            # sample written so far airs (listeners trail the write head by
+            # their live latency). The airing row stays — clamped to the
+            # program the track actually occupies, so the now-playing
+            # schedule hands over to the next track at the cut rather than
+            # at this track's original end.
+            aired = self.encoder.program_seconds() - start_prog
+            if row_id is not None and aired > 0:
+                self.rt.db.execute(
+                    "UPDATE play_log SET played_s = ? WHERE id = ?",
+                    (round(aired, 3), row_id))
             log.info("skipped track %s (%s)", track["id"], track["title"])
         return skipped
 

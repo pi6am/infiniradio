@@ -284,7 +284,10 @@ def apply_vote(db: DB, cfg: Config, track_id: int, listener_id: str, value: int)
 def mark_aired(db: DB, track_id: int, airtime_iso: str,
                prog_offset: float | None = None, epoch: int | None = None,
                played_s: float | None = None,
-               resume_row_id: int | None = None) -> None:
+               resume_row_id: int | None = None) -> int | None:
+    """Log an airing; returns the play_log row id (new or resumed) so the
+    caller can adjust the row later — e.g. clamping an in-place-skipped
+    airing's window to what actually aired."""
     if resume_row_id is not None:
         # Restart resume: the airing cut off by the restart continues from
         # its remainder. Update the existing row in place — one airing, one
@@ -296,9 +299,10 @@ def mark_aired(db: DB, track_id: int, airtime_iso: str,
             (airtime_iso, prog_offset, epoch, played_s, resume_row_id))
         db.execute("UPDATE tracks SET last_played_at = ? WHERE id = ?",
                    (airtime_iso, track_id))
-        return
-    db.execute("INSERT INTO play_log (track_id, started_at, prog_offset, epoch)"
-               " VALUES (?, ?, ?, ?)", (track_id, airtime_iso, prog_offset, epoch))
+        return resume_row_id
+    return db.execute(
+        "INSERT INTO play_log (track_id, started_at, prog_offset, epoch)"
+        " VALUES (?, ?, ?, ?)", (track_id, airtime_iso, prog_offset, epoch))
     db.execute(
         "UPDATE tracks SET play_count = play_count + 1, last_played_at = ? WHERE id = ?",
         (airtime_iso, track_id),
