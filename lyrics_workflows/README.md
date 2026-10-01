@@ -26,6 +26,8 @@ lyrics_workflows/
     feedback.j2.md        # retry-feedback template (branches on failures)
   jp-title-first/         # three-line child: name, description, base
   zh-title-first/         # child + a [params] language override
+  en-native/              # child: removes the laundering pair, adds one
+                          #   write stage (its only template file)
 ```
 
 ## workflow.toml
@@ -294,8 +296,8 @@ cycles and typos rejected at startup):
 | `remove_stages = [...]` | deletes stages by id (workflow-level key — declare it *before* any `[[stage]]`, TOML assigns trailing keys to the last table) |
 | templates | search path child dir → ancestors; a child file shadows a base file by name |
 
-A worked example — an English-native workflow that skips the
-foreign-language laundering stages:
+A worked example — shipped as `en-native/`, an English-native workflow
+that skips the foreign-language laundering stages:
 
 ```toml
 # en-native/workflow.toml

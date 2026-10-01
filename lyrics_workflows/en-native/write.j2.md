@@ -1,0 +1,14 @@
+Use this guide to write a song in English:
+```
+{{ brainstorm }}
+```
+
+Write the song directly in English. Just write the song title and lyrics (mark sections with headers from this list: [Intro], [Verse], [Chorus], [Outro], [Bridge], [Solo], [Instrumental] as appropriate, but they don't have to be in this order and you don't have to use all of them, just what makes sense for the song). Do not write any comments on instrumentation or arrangement, just write the lyrics. Treat the brainstorm as a rough guide, but focus on writing a good song. Don't overdo it, focus on the most important parts of the theme.
+{% if style_guide %}
+
+{{ style_guide }}
+{% endif %}
+{% if structure_guide %}
+
+{{ structure_guide }}
+{% endif %}

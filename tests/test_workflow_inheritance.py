@@ -89,7 +89,7 @@ def _load_from(cfg, wf_dir):
 
 def _real_family_checks(cfg) -> None:
     specs = load_workflows(cfg)
-    assert set(specs) == {"title-first", "jp-title-first", "zh-title-first"}
+    assert set(specs) == {"title-first", "jp-title-first", "zh-title-first", "en-native"}
     assert specs["title-first"].abstract
     assert not specs["jp-title-first"].abstract and specs["jp-title-first"].styled
     jp = specs["jp-title-first"]
@@ -101,7 +101,15 @@ def _real_family_checks(cfg) -> None:
     assert refine.max_attempts == 3 and refine.max_tokens == 12288
     # jp resolves byte-identically whether standalone history or inherited
     assert jp.directory.name == "jp-title-first" and len(jp.stages) == 7
-    print("0. real family: title-first base + jp/zh children, jp-authority values")
+    # en-native: laundering pair removed, write stage slotted after
+    # brainstorm, everything else inherited
+    en = specs["en-native"]
+    assert not en.abstract and en.styled
+    assert [s.id for s in en.stages] == \
+        ["brainstorm", "write", "name", "style", "refine", "tags"]
+    assert en.stages[1].block == "lyrics_en" and en.stages[1].gate is not None
+    assert en.output.max_tags == 5 and "style_guide" in en.vars
+    print("0. real family: title-first base + jp/zh/en children, jp-authority values")
 
 
 async def _child_executes(spec) -> None:

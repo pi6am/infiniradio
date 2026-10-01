@@ -27,6 +27,10 @@ def _spec():
     return load_workflows(load_config())["jp-title-first"]
 
 
+def _spec_family():
+    return load_workflows(load_config())
+
+
 async def _main() -> None:
     spec = _spec()
 
@@ -330,6 +334,20 @@ the true end"""
     assert r.tags == ["vocal", "english"], r.tags
     print("11. empty vocabulary -> coherent fallback prompt, statics only")
 
+    # 12. en-native (inherited): direct English writing, no laundering
+    #     stages — the inherited name/style/refine/tags machinery runs
+    #     unchanged over the write stage's output
+    en = _spec_family()["en-native"]
+    assert [s.id for s in en.stages] == \
+        ["brainstorm", "write", "name", "style", "refine", "tags"]
+    r = await run_workflow(MockLLMClient(), en, initial_vars={"title": "Glass Ember"},
+                           tag_vocabulary=VOCAB)
+    assert r.ok, r.error
+    assert r.title == "A Window Far Away"
+    assert r.lyrics.startswith("[Intro]") and "[Chorus]" in r.lyrics
+    assert r.tags == ["vocal", "english", "rock", "pop", "male vocal"], r.tags
+    print("12. en-native end-to-end ok (write stage, inherited machinery)")
+
 
 def run() -> None:
     asyncio.run(_main())
@@ -340,12 +358,13 @@ def run() -> None:
     import subprocess
     import sys as _sys
 
-    for wf in ("jp-title-first", "zh-title-first"):
+    for wf, sections in (("jp-title-first", 14), ("zh-title-first", 14),
+                         ("en-native", 12)):
         r = subprocess.run(
             [_sys.executable, "-m", "infiniradio.lyrics", "--dry-run", wf],
             capture_output=True, text=True, cwd=_helpers.REPO_ROOT)
         assert r.returncode == 0, (wf, r.stderr[-800:])
-        assert r.stdout.count("--- ") >= 14, wf  # 7 stages x prompt + feedback
+        assert r.stdout.count("--- ") >= sections, wf  # stages x prompt + feedback
     print("test_lyrics_engine: ALL PASSED (+ dry-run regression guard)")
 
 

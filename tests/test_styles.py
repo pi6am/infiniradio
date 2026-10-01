@@ -131,16 +131,16 @@ async def _main(cfg, rt) -> None:
     spec = rt.workflows["jp-title-first"]
     assert spec.styled and "rhyme_guide" in spec.vars
     assert dj.pick_generator(rt) is not None
-    assert len(dj.enabled_workflows(rt)) == 2
+    assert len(dj.enabled_workflows(rt)) == 3  # jp + zh + en-native
     db.set_setting("workflows_disabled", ["zh-title-first"])
-    assert [w.name for w in dj.enabled_workflows(rt)] == ["jp-title-first"]
+    assert [w.name for w in dj.enabled_workflows(rt)] == ["en-native", "jp-title-first"]
     db.set_setting("dj.lyrics_share", 1.0)
     assert {dj.pick_generator(rt)[0] for _ in range(30)} == {"workflow"}
     db.set_setting("dj.lyrics_share", 0.0)
     assert {dj.pick_generator(rt)[0] for _ in range(30)} == {"prompt"}
     db.set_setting("dj.lyrics_share", 0.5)
     assert {dj.pick_generator(rt)[0] for _ in range(60)} == {"prompt", "workflow"}
-    db.set_setting("workflows_disabled", ["jp-title-first", "zh-title-first"])
+    db.set_setting("workflows_disabled", ["jp-title-first", "zh-title-first", "en-native"])
     db.set_setting("dj.lyrics_share", 1.0)
     assert dj.pick_generator(rt)[0] == "prompt"  # empty pool falls through
     db.set_setting("workflows_disabled", [])

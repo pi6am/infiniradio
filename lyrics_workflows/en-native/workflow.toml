@@ -1,0 +1,29 @@
+# English-native title-first: the song is written directly in English from
+# the brainstorm — no foreign-language laundering. The A/B experiment
+# against the jp/zh drafting workflows (whose laundering existed for lyric
+# diversity); watch the vote weights. Everything else — brainstorm, name,
+# style, refine, tags, gates, tuning — comes from the shared base.
+name = "en-native"
+description = "random title → brainstorm → English draft → style → rhythm refine"
+base = "title-first"
+remove_stages = ["foreign_lyrics", "translate"]
+
+[[stage]]
+# Replaces the foreign-draft + translate pair: one stage, English output,
+# the same robust block extraction refine uses. The inherited name/style
+# stages continue THIS stage's thread — "continue" is positional, not
+# name-bound, so the shared conversation flow works unchanged.
+id = "write"
+after = "brainstorm"
+template = "write.j2.md"
+block = "lyrics_en"
+thread = "new"
+max_attempts = 3
+feedback_template = "feedback.j2.md"
+
+[stage.gate]
+max_chars = 6000
+any_of = [
+  '\[Verse\]', '\[Chorus\]', '\[Intro\]', '\[Outro\]',
+  '\[Bridge\]', '\[Solo\]', '\[Instrumental\]',
+]

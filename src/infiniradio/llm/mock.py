@@ -22,7 +22,10 @@ from typing import Any
 from .base import LLMClient, LLMError, Message, Reply
 
 # (keyword in the last user message, reply) — first match wins. Keywords
-# taken from the reference workflows' templates.
+# taken from the reference workflows' templates. The en-native "write"
+# needle must precede the foreign-draft needle: the write prompt opens
+# "Use this guide to write a song in English:", which the foreign needle
+# would otherwise match first.
 SCRIPT: list[tuple[str, str]] = [
     ("Brainstorm ideas", """\
 Theme and progression (no lyrics):
@@ -34,6 +37,23 @@ second character/force and the pull between them. The chorus is the emotional
 spike: a request spoken too late. Bridge strips the arrangement down to the
 one honest sentence the verses avoided. Outro returns to the opening image,
 now understood differently."""),
+    ("write a song in English", """\
+[Intro]
+
+[Verse 1]
+In a quiet room I unfold a map
+Searching for the name of a town I have never seen
+
+[Chorus]
+Beyond the window a light is swaying
+Night breaks while it stays out of reach
+
+[Bridge]
+A small voice carried by the wind
+
+[Outro]
+
+[Instrumental]"""),
     ("Use this guide to write a song", """\
 タイトル：遠い窓
 
