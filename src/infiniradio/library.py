@@ -451,6 +451,43 @@ def tag_vocabulary(db: DB) -> list[str]:
         "SELECT name FROM tags WHERE llm_pickable = 1 ORDER BY name")]
 
 
+def rename_tag(db: DB, tag_id: int, new_name: str) -> tuple[bool, str]:
+    """Rename a tag; renaming onto an existing name MERGES (links move to
+    the survivor, the old row is deleted) — the admin panel's way to clean
+    up split-junk tags like '8' + 'bit' into '8-bit'."""
+    new_name = normalize_tag(new_name)
+    if not new_name:
+        return False, "tag name is empty"
+    row = db.one("SELECT * FROM tags WHERE id = ?", (tag_id,))
+    if not row:
+        return False, "no such tag"
+    if row["name"] == new_name:
+        return True, "unchanged"
+    existing = db.one("SELECT id FROM tags WHERE name = ?", (new_name,))
+    if existing is None:
+        db.execute("UPDATE tags SET name = ? WHERE id = ?", (new_name, tag_id))
+        return True, f"renamed to {new_name!r}"
+    target = existing["id"]
+    for table, col in (("track_tags", "track_id"), ("prompt_tags", "prompt_id"),
+                       ("style_tags", "style_id")):
+        db.execute(f"INSERT OR IGNORE INTO {table} ({col}, tag_id)"
+                   f" SELECT {col}, ? FROM {table} WHERE tag_id = ?", (target, tag_id))
+        db.execute(f"DELETE FROM {table} WHERE tag_id = ?", (tag_id,))
+    db.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+    return True, f"merged into existing {new_name!r}"
+
+
+def delete_tag(db: DB, tag_id: int) -> bool:
+    """Remove a tag and every link to it (tracks/prompts/styles keep their
+    other tags; nothing else references a tag)."""
+    if db.one("SELECT id FROM tags WHERE id = ?", (tag_id,)) is None:
+        return False
+    for table in ("track_tags", "prompt_tags", "style_tags"):
+        db.execute(f"DELETE FROM {table} WHERE tag_id = ?", (tag_id,))
+    db.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+    return True
+
+
 # ---------------------------------------------------------------- style seeds
 
 def import_styles(db: DB, cfg: Config, only_new: bool = True) -> int:
@@ -549,7 +586,10 @@ def import_prompts(db: DB, cfg: Config, only_new: bool = True) -> int:
             continue
         names = file_tags.get(p["name"])
         if not names:
-            names = [part for part in re.split(r"[-_]+", p["name"].lower()) if part]
+            parts = [part for part in re.split(r"[-_]+", p["name"].lower()) if part]
+            # "chiptune-upbeat" -> chiptune, upbeat — but "8-bit" must stay
+            # whole: split only when every fragment is a real word.
+            names = parts if all(part.isalpha() for part in parts) else [p["name"].lower()]
         if apply_prompt_tags(db, cfg, p["id"], names):
             seeded += 1
     if seeded:

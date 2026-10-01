@@ -34,6 +34,22 @@ async def _main(cfg, rt) -> None:
     assert "vocal" not in vocabs and "english" not in vocabs  # forced, never offered
     print(f"tag vocabulary: {len(vocabs)} LLM-pickable (forced tags excluded)")
 
+    # name-derived prompt tags: hyphenated names split only into real words
+    # ("8-bit" stays whole instead of becoming '8' + 'bit')
+    db.execute("INSERT INTO prompts (name, style_text, song_text, cot_mode, enabled,"
+               " created_at) VALUES ('8-bit', 's', '', 'full', 1, '2026-01-01T00:00:00')")
+    db.execute("INSERT INTO prompts (name, style_text, song_text, cot_mode, enabled,"
+               " created_at) VALUES ('slow-ballad', 's', '', 'full', 1,"
+               " '2026-01-01T00:00:00')")
+    library.import_prompts(db, cfg)
+    assert library.prompt_tags(db, db.one(
+        "SELECT id FROM prompts WHERE name = '8-bit'")["id"]) == ["8-bit"]
+    assert library.prompt_tags(db, db.one(
+        "SELECT id FROM prompts WHERE name = 'slow-ballad'")["id"]) == \
+        ["ballad", "slow"]  # sorted by name
+    assert db.one("SELECT COUNT(*) AS n FROM tags WHERE name IN ('8', 'bit')")["n"] == 0
+    print("prompt-name tag derivation: '8-bit' whole, 'chiptune-upbeat' split")
+
     # commission a lyrics workflow job
     job_id = dj.enqueue_job(db, workflow_id="jp-title-first")
     job = db.one("SELECT * FROM generation_jobs WHERE id = ?", (job_id,))

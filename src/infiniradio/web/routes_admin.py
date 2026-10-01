@@ -580,13 +580,7 @@ async def prompts_page(request: Request):
         p["aired"] = stats["aired"]
         p["tags"] = library.prompt_tags(rt.db, p["id"])
         prompts.append(p)
-    tags = []
-    for t in rt.db.query("SELECT id, name FROM tags ORDER BY name"):
-        stats = dj.tag_air_stats(rt.db, t["id"])
-        tracks = rt.db.one(
-            "SELECT COUNT(*) AS n FROM track_tags WHERE tag_id = ?", (t["id"],))["n"]
-        tags.append({"name": t["name"], "aired": stats["aired"],
-                     "avg_score": round(stats["avg_score"], 3), "tracks": tracks})
+    # (per-tag stats + management live on the dedicated /admin/tags page)
     workflows = []
     admin_off = set(rt.db.get_setting("workflows_disabled") or [])
     for w in getattr(rt, "workflows", {}).values():
@@ -606,7 +600,7 @@ async def prompts_page(request: Request):
                           "weight": round(weight, 3) if weight is not None else None})
     return request.app.state.templates.TemplateResponse(
         request, "admin/prompts.html",
-        _ctx(request, prompts=prompts, tags=tags, workflows=workflows,
+        _ctx(request, prompts=prompts, workflows=workflows,
              has_llm=rt.llm is not None))
 
 
@@ -950,6 +944,83 @@ async def styles_export(request: Request):
             lines.append(f"tags = {json.dumps(tag_names)}\n")
         lines.append("\n")
     return PlainTextResponse("".join(lines), media_type="text/plain")
+
+
+# ------------------------------------------------------------------ tags
+
+@router.get("/tags", response_class=HTMLResponse)
+async def tags_page(request: Request, msg: str = ""):
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    llm_seeds, static_seeds = library.load_tag_seeds(rt.cfg)
+    managed = set(llm_seeds) | set(static_seeds)
+    counts = {}
+    for table in ("track_tags", "prompt_tags", "style_tags"):
+        for r in rt.db.query(f"SELECT tag_id, COUNT(*) AS n FROM {table} GROUP BY tag_id"):
+            counts.setdefault(r["tag_id"], {})[table] = r["n"]
+    tags = []
+    for t in rt.db.query("SELECT * FROM tags ORDER BY name"):
+        stats = dj.tag_air_stats(rt.db, t["id"])
+        c = counts.get(t["id"], {})
+        tags.append({"id": t["id"], "name": t["name"],
+                     "pickable": bool(t["llm_pickable"]),
+                     "managed": t["name"] in managed,
+                     "tracks": c.get("track_tags", 0),
+                     "prompts": c.get("prompt_tags", 0),
+                     "styles": c.get("style_tags", 0),
+                     "aired": stats["aired"],
+                     "avg_score": round(stats["avg_score"], 3)})
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/tags.html", _ctx(request, tags=tags, msg=msg))
+
+
+@router.post("/tags/create")
+async def tags_create(request: Request, name: str = Form(""),
+                      pickable: bool = Form(False), csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    tag_id = library._tag_id(rt.db, name)
+    msg = "tag name is empty"
+    if tag_id:
+        rt.db.execute("UPDATE tags SET llm_pickable = ? WHERE id = ?",
+                      (int(pickable), tag_id))
+        msg = f"tag {library.normalize_tag(name)!r} ready"
+    return RedirectResponse(f"/admin/tags?msg={msg}", status_code=303)
+
+
+@router.post("/tags/{tag_id}/rename")
+async def tags_rename(request: Request, tag_id: int, new_name: str = Form(""),
+                      csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    ok, msg = library.rename_tag(rt.db, tag_id, new_name)
+    return RedirectResponse(f"/admin/tags?msg={msg}", status_code=303)
+
+
+@router.post("/tags/{tag_id}/pickable")
+async def tags_pickable(request: Request, tag_id: int, csrf: str = Form("")):
+    """Toggle LLM-pickable. Tags listed in tags.toml are marked 'managed':
+    the file's llm/static grouping wins again at the next restart."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    row = rt.db.one("SELECT llm_pickable FROM tags WHERE id = ?", (tag_id,))
+    if row:
+        rt.db.execute("UPDATE tags SET llm_pickable = ? WHERE id = ?",
+                      (0 if row["llm_pickable"] else 1, tag_id))
+    return RedirectResponse("/admin/tags", status_code=303)
+
+
+@router.post("/tags/{tag_id}/delete")
+async def tags_delete(request: Request, tag_id: int, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    library.delete_tag(rt.db, tag_id)
+    return RedirectResponse("/admin/tags", status_code=303)
 
 
 # ------------------------------------------------------------------ jobs

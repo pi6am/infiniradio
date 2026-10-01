@@ -75,22 +75,6 @@
 </div>
 {% endif %}
 
-{% if tags %}
-<div class="card">
-  <h2 style="margin-top:0">tags</h2>
-  <p class="muted">Cross-cutting vote aggregation over every tagged track (prompts seed static
-    tags; lyrics workflows add LLM-picked ones). Average Wilson score of AIRED tracks per tag.</p>
-  <table>
-    <tr><th>tag</th><th>tracks</th><th>aired</th><th>avg Wilson</th></tr>
-    {% for t in tags %}
-    <tr>
-      <td>{{ t.name }}</td>
-      <td class="muted">{{ t.tracks }}</td>
-      <td class="muted">{{ t.aired }}</td>
-      <td class="muted">{{ t.avg_score }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-</div>
-{% endif %}
+<p class="muted">per-tag stats and tag management live on
+  <a href="/admin/tags">the tags page →</a></p>
 {% endblock %}

@@ -147,6 +147,32 @@ async def _main(cfg, rt) -> None:
     db.execute("DELETE FROM settings WHERE key = 'dj.lyrics_share'")
     print("8. live enable/disable + lyrics_share semantics ok")
 
+    # 9. tag management (the admin panel's backing): rename, merge, delete
+    pid = db.one("SELECT id FROM prompts LIMIT 1")["id"]
+    tid = library._tag_id(db, "test-genre")
+    ok, msg = library.rename_tag(db, tid, "renamed-genre")
+    assert ok and db.one("SELECT name FROM tags WHERE id = ?",
+                         (tid,))["name"] == "renamed-genre"
+    assert library.rename_tag(db, tid, "")[0] is False      # empty rejected
+    assert library.rename_tag(db, tid, "renamed-genre")[1] == "unchanged"
+    # renaming onto an existing name MERGES: links move, old row removed
+    a = library._tag_id(db, "8")
+    b = library._tag_id(db, "8-bit")
+    db.execute("INSERT INTO prompt_tags (prompt_id, tag_id) VALUES (?, ?)", (pid, a))
+    ok, msg = library.rename_tag(db, a, "8-bit")
+    assert ok and "merged" in msg
+    assert db.one("SELECT COUNT(*) AS n FROM tags WHERE name = '8'")["n"] == 0
+    assert db.one("SELECT COUNT(*) AS n FROM prompt_tags WHERE tag_id = ?"
+                  " AND prompt_id = ?", (b, pid))["n"] == 1
+    # delete removes the tag and every link
+    db.execute("INSERT INTO track_tags (track_id, tag_id) VALUES (1, ?)", (tid,))
+    assert library.delete_tag(db, tid) is True
+    assert db.one("SELECT COUNT(*) AS n FROM tags WHERE name = 'renamed-genre'")["n"] == 0
+    assert db.one("SELECT COUNT(*) AS n FROM track_tags WHERE tag_id = ?",
+                  (tid,))["n"] == 0
+    assert library.delete_tag(db, tid) is False  # already gone
+    print("9. tag management ok (rename, merge-onto-existing, delete + links)")
+
 
 def run() -> None:
     cfg, tmp = isolated_config()

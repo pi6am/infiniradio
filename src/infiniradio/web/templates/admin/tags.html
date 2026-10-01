@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}admin — tags{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">tag vocabulary</h2>
+  {% if msg %}<p class="muted" style="margin:0 0 10px">{{ msg }}</p>{% endif %}
+  <p class="muted">Tags aggregate listener verdicts across prompts, styles and workflows
+    ("do <i>vocal</i> songs outperform?"). <b>pickable</b> tags are offered to lyrics
+    workflows' tagging stage; renaming onto an existing name <b>merges</b> (links move to
+    the survivor — the cleanup for split junk like '8' + 'bit' → '8-bit'). Tags marked
+    <span class="pill">tags.toml</span> are file-managed: the file's llm/static grouping
+    wins again at the next restart.</p>
+  <table>
+    <tr><th>name</th><th>pickable</th><th>tracks</th><th>prompts</th><th>styles</th>
+        <th>aired</th><th>avg Wilson</th><th style="width:30%">actions</th></tr>
+    {% for t in tags %}
+    <tr>
+      <td><b>{{ t.name }}</b>{% if t.managed %} <span class="pill"
+          title="listed in tags.toml — the file's grouping wins at restart">tags.toml</span>{% endif %}</td>
+      <td>{% if t.pickable %}<span class="pill ok">yes</span>{% else %}<span class="pill">no</span>{% endif %}</td>
+      <td class="muted">{{ t.tracks }}</td>
+      <td class="muted">{{ t.prompts }}</td>
+      <td class="muted">{{ t.styles }}</td>
+      <td class="muted">{{ t.aired }}</td>
+      <td class="muted">{{ t.avg_score }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/tags/{{ t.id }}/rename">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="text" name="new_name" placeholder="rename / merge" size="12">
+          <button type="submit">rename</button>
+        </form>
+        <form class="inline" method="post" action="/admin/tags/{{ t.id }}/pickable">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">{{ 'unlist' if t.pickable else 'offer to LLM' }}</button>
+        </form>
+        <form class="inline" method="post" action="/admin/tags/{{ t.id }}/delete">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" title="removes the tag and every link to tracks/prompts/styles">delete</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">no tags yet — they seed from tags.toml at startup</td></tr>
+    {% endfor %}
+  </table>
+
+  <form method="post" action="/admin/tags/create" style="margin-top:14px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>new tag</label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" name="name" placeholder="e.g. symphonic-metal" required>
+      <label style="margin:0"><input type="checkbox" name="pickable" value="on" checked> pickable</label>
+      <button type="submit">create</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
