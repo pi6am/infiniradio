@@ -540,24 +540,69 @@ async def track_rename(request: Request, track_id: int, title: str = Form(""), c
     return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
 
 
-@router.post("/track/{track_id}/variation")
-async def track_variation(request: Request, track_id: int,
-                          style_prompt_id: int = Form(0), custom_style: str = Form(""),
-                          seed: int = Form(0), csrf: str = Form("")):
+@router.get("/track/{track_id}/vary", response_class=HTMLResponse)
+async def track_vary_form(request: Request, track_id: int):
+    """Create a variation of a track — two modes on one page:
+
+    re-render: the saved ABC re-rendered under a (possibly different) style
+    and seed — cheap, same song structure. re-compose: the ABC discarded
+    and re-planned from admin-EDITED lyrics — the repair path for songs
+    whose ABC was built from mangled lyrics.
+    """
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    row = rt.db.one("SELECT * FROM tracks WHERE id = ? AND status = 'ready'", (track_id,))
+    if not row:
+        return RedirectResponse("/admin/library", status_code=303)
+    track = _track_with_meta(rt.db, row)
+    prompts = rt.db.query("SELECT id, name FROM prompts WHERE enabled = 1 ORDER BY name")
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/vary.html",
+        _ctx(request, t=track, prompts=prompts))
+
+
+@router.post("/track/{track_id}/vary")
+async def track_vary_submit(request: Request, track_id: int, mode: str = Form("rerender"),
+                            style_prompt_id: int = Form(0), custom_style: str = Form(""),
+                            lyrics: str = Form(""), title: str = Form(""),
+                            seed: int = Form(0), csrf: str = Form("")):
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    row = rt.db.one("SELECT id, abc_text FROM tracks WHERE id = ? AND status = 'ready'",
-                    (track_id,))
-    if not row or not row["abc_text"]:
-        return PlainTextResponse("track has no ABC score to vary", status_code=400)
-    dj.enqueue_job(
-        rt.db,
-        prompt_id=style_prompt_id or None,
-        parent_track_id=track_id,
-        style_override=custom_style.strip() or None,
-        seed=seed or None,
-    )
+    row = rt.db.one("SELECT * FROM tracks WHERE id = ? AND status = 'ready'", (track_id,))
+    if not row:
+        return PlainTextResponse("track is not ready", status_code=400)
+    if mode == "recompose":
+        if not lyrics.strip():
+            return PlainTextResponse("re-compose needs lyrics (edit and fix the"
+                                     " track's lyrics first)", status_code=400)
+        # style resolution: custom text > chosen prompt > the parent's own
+        style_override = custom_style.strip() or None
+        if style_override is None and style_prompt_id:
+            prompt = rt.db.one("SELECT style_text FROM prompts WHERE id = ?",
+                               (style_prompt_id,))
+            style_override = prompt["style_text"] if prompt else None
+        dj.enqueue_job(
+            rt.db,
+            parent_track_id=track_id,
+            style_override=style_override,
+            seed=seed or None,
+            recompose=True,
+            lyrics=lyrics,
+            title=title.strip() or None,
+        )
+        log.info("commissioned re-compose of track %s (%s)", track_id, row["title"])
+    else:
+        if not row["abc_text"]:
+            return PlainTextResponse("track has no ABC score to vary", status_code=400)
+        dj.enqueue_job(
+            rt.db,
+            prompt_id=style_prompt_id or None,
+            parent_track_id=track_id,
+            style_override=custom_style.strip() or None,
+            seed=seed or None,
+        )
     return RedirectResponse("/admin/jobs", status_code=303)
 
 

@@ -262,7 +262,10 @@ def variation_parent(db: DB, cfg: Config) -> dict | None:
 def enqueue_job(db: DB, *, prompt_id: int | None = None, parent_track_id: int | None = None,
                 style_override: str | None = None, seed: int | None = None,
                 workflow_id: str | None = None,
-                style_id: int | None = None) -> int:
+                style_id: int | None = None,
+                recompose: bool = False,
+                lyrics: str | None = None,
+                title: str | None = None) -> int:
     """Queue a generation job. Workflow jobs enter the 'lyrics' phase first
     (theme title stashed in progress); everything else goes straight to
     'render'.
@@ -271,6 +274,12 @@ def enqueue_job(db: DB, *, prompt_id: int | None = None, parent_track_id: int | 
     right here with the job's seed and stashed in progress — the resolution
     is then reproducible from the job row alone, and a later style edit
     cannot silently change what an already-commissioned job will render.
+
+    recompose=True (with parent_track_id): a RE-COMPOSE variation — the
+    parent's ABC is discarded and re-planned from the given (admin-edited)
+    lyrics. The job carries its own outputs (title/lyrics/style) so the
+    render is self-contained; style_id is inherited from the parent unless
+    given, keeping per-style stats on the same song.
     """
     from . import styles as styles_mod
 
@@ -290,11 +299,26 @@ def enqueue_job(db: DB, *, prompt_id: int | None = None, parent_track_id: int | 
         db.execute(
             "UPDATE styles SET times_used = times_used + 1, last_used_at = ? WHERE id = ?",
             (iso(utcnow()), style_id))
+    if recompose:
+        parent = db.one("SELECT * FROM tracks WHERE id = ?", (parent_track_id,))
+        if parent is None:
+            raise ValueError(f"parent track {parent_track_id!r} does not exist")
+        if style_id is None:
+            style_id = parent["style_id"]
+        style = style_override or parent["style_text"]
+        progress["outputs"] = {
+            "title": (title or parent["title"] or "").strip(),
+            "theme_title": parent["theme_title"] or "",
+            "style": style,
+            "lyrics": lyrics if lyrics is not None else parent["lyrics_snapshot"],
+            "tags": [],  # copied from the parent at ingest, not re-picked
+        }
     job_id = db.execute(
         "INSERT INTO generation_jobs (prompt_id, parent_track_id, style_override, seed,"
-        " workflow_id, style_id, phase, progress, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
-        (prompt_id, parent_track_id, style_override, seed, workflow_id, style_id, phase,
+        " workflow_id, style_id, recompose, phase, progress, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+        (prompt_id, parent_track_id, style_override, seed, workflow_id, style_id,
+         int(bool(recompose)), phase,
          json.dumps(progress, ensure_ascii=False), iso(utcnow())),
     )
     if prompt_id:
@@ -332,7 +356,19 @@ def build_request(db: DB, job: dict) -> GenRequest:
     if parent:
         # Variation: re-render the parent's saved ABC. Style may come from a
         # different prompt (new instrumentation); lyrics stay the parent's.
+        # A RE-COMPOSE variation instead discards the ABC and re-plans it
+        # from the job's own outputs (admin-edited lyrics) — abc=None is
+        # the "plan fresh" path, same as a brand-new song.
         style = job.get("style_override") or (prompt["style_text"] if prompt else parent["style_text"])
+        if job.get("recompose"):
+            outputs = (_job_progress(job).get("outputs") or {})
+            return GenRequest(
+                style=outputs.get("style") or style,
+                lyrics=outputs.get("lyrics") or parent["lyrics_snapshot"],
+                seed=job.get("seed") or _random_seed(),
+                cot_mode="full",
+                parent_track_id=parent["id"],
+            )
         return GenRequest(
             style=style,
             lyrics=parent["lyrics_snapshot"],
@@ -597,6 +633,10 @@ async def job_runner(rt) -> None:
                     result = await rt.generator.generate(req, library.track_dir(cfg, track_id))
                 await library.ingest(db, cfg, track_id, result,
                                      tags=outputs.get("tags") or None)
+                if job["recompose"] and job["parent_track_id"]:
+                    # Same song, repaired: the child carries the parent's tags.
+                    for name in library.track_tags(db, job["parent_track_id"]):
+                        library.apply_track_tags(db, cfg, track_id, [name])
                 # Conditional on 'running': if the job was cancelled from the
                 # admin panel while we were generating, the cancellation wins.
                 db.execute("UPDATE generation_jobs SET status = 'done', finished_at = ?,"

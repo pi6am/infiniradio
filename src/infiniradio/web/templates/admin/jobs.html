@@ -10,7 +10,9 @@
     {% for j in jobs %}
     <tr>
       <td><a href="/admin/jobs/{{ j.id }}">{{ j.id }}</a></td>
-      <td>{% if j.parent_track_id %}variation of
+      <td>{% if j.recompose %}re-compose of
+          <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>
+          {% elif j.parent_track_id %}variation of
           <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>
           {% else %}new{% endif %}</td>
       <td>{% if j.workflow_id %}<a href="/admin/jobs/{{ j.id }}">{{ j.workflow_id }}</a>

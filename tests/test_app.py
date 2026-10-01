@@ -41,8 +41,9 @@ def run() -> None:
         for need in ("/admin/jobs/{job_id}", "/admin/styles",
                      "/admin/styles/edit/{style_id}", "/admin/workflows/{workflow_id}/toggle",
                      "/admin/track/{track_id}/undelete", "/admin/track/{track_id}/hold",
-                     "/admin/tags", "/admin/tags/create", "/admin/tags/{tag_id}/rename",
-                     "/admin/tags/{tag_id}/delete", "/admin/tags/{tag_id}/pickable"):
+                     "/admin/track/{track_id}/vary", "/admin/tags", "/admin/tags/create",
+                     "/admin/tags/{tag_id}/rename", "/admin/tags/{tag_id}/delete",
+                     "/admin/tags/{tag_id}/pickable"):
             assert need in paths, f"missing route {need}"
         print(f"1. app with --mockaudio --mockllm created; {len(paths)} admin routes")
 

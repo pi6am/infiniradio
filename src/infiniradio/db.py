@@ -229,6 +229,14 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE generation_jobs ADD COLUMN lyrics_finished_at TEXT;
     ALTER TABLE generation_jobs ADD COLUMN render_started_at TEXT;
     """,
+    11: """
+    -- Re-compose: a variation that DISCARDS the parent's saved ABC and
+    -- re-plans it from (admin-edited) lyrics — the repair path for songs
+    -- whose ABC was built from mangled lyrics. The job carries its own
+    -- outputs (edited lyrics, title, style) in progress, like a finished
+    -- lyrics job; render-time abc=None routes through audited planning.
+    ALTER TABLE generation_jobs ADD COLUMN recompose INTEGER NOT NULL DEFAULT 0;
+    """,
 }
 
 

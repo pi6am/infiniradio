@@ -44,6 +44,8 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
   "what actually works" analysis.
 - **Variations** — every track's ABC score is kept; popular songs get re-rendered
   (optionally under a *different style prompt* = new instrumentation) with a fresh seed.
+  The admin panel also offers **re-compose**: edit a track's lyrics and re-plan the ABC
+  from scratch — the repair path for songs whose score was built from mangled lyrics.
 - **Disk quota without waste** — when over quota, generation *pauses*. Unplayed audio is
   never auto-deleted; eviction only touches played tracks (most-downvoted first).
   ABC text always survives.

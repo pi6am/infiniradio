@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}admin — vary track {{ t.id }}{% endblock %}
+{% block content %}
+<p style="margin:0 0 12px"><a href="/admin/track/{{ t.id }}">← back to track {{ t.id }}</a></p>
+<div class="card">
+  <h2 style="margin-top:0">create a variation of “{{ t.title }}”</h2>
+  <p class="muted">Two ways to vary a track. <b>Re-render</b> keeps the saved ABC (same song
+    structure) and changes style/seed — cheap. <b>Re-compose</b> discards the ABC and
+    re-plans it from the lyrics below — the repair path when the ABC was built from
+    mangled or duplicated lyrics: fix the lyrics here, get a fresh composition.</p>
+</div>
+
+{% if t.abc_text %}
+<div class="card">
+  <h3 style="margin-top:0">re-render <span class="muted">(saved ABC, new style and/or seed)</span></h3>
+  <form method="post" action="/admin/track/{{ t.id }}/vary">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="mode" value="rerender">
+    <label>style prompt</label>
+    <select name="style_prompt_id">
+      <option value="0">— same style as the original —</option>
+      {% for p in prompts %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+    </select>
+    <label>custom style (overrides the prompt above)</label>
+    <input type="text" name="custom_style" placeholder="leave empty to keep the chosen prompt's style">
+    <label>seed (0 = fresh random)</label>
+    <input type="number" name="seed" value="0" min="0">
+    <div style="margin-top:14px"><button type="submit">queue re-render</button></div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0">re-compose <span class="muted">(new ABC from the lyrics below)</span></h3>
+  <form method="post" action="/admin/track/{{ t.id }}/vary">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="mode" value="recompose">
+    <label>title</label>
+    <input type="text" name="title" value="{{ t.title }}">
+    <label>style prompt or custom style</label>
+    <select name="style_prompt_id">
+      <option value="0">— same style as the original —</option>
+      {% for p in prompts %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+    </select>
+    <label>custom style (used as-is; defaults to the original's style)</label>
+    <input type="text" name="custom_style" value="{{ t.style_text }}">
+    <label>lyrics — edit and fix; a fresh ABC is planned from exactly this text</label>
+    <textarea name="lyrics" rows="20" style="font-family:monospace">{{ t.lyrics_snapshot }}</textarea>
+    <label>seed (0 = fresh random)</label>
+    <input type="number" name="seed" value="0" min="0">
+    <div style="margin-top:14px">
+      <button type="submit" style="border-color:var(--accent)">queue re-compose</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

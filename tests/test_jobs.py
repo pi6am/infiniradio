@@ -127,6 +127,38 @@ async def _main(cfg, rt) -> None:
     assert "lyrics" not in timings and "waiting for lyrics" not in timings
     print(f"prompt-job timing rows: {list(timings)}")
 
+    # re-compose: discards the parent's ABC, re-plans from edited lyrics,
+    # keeps the title/theme/style lineage, and inherits the parent's tags
+    fixed_lyrics = "[Intro]\n\n[Verse 1]\nrepaired lyrics\n\n[Chorus]\ncall the rain\n"
+    jid4 = dj.enqueue_job(db, parent_track_id=track_id, recompose=True,
+                          lyrics=fixed_lyrics, style_override="orchestral ballad, 70 BPM",
+                          seed=77)
+    j4 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid4,))
+    assert j4["recompose"] == 1 and j4["phase"] == "render" and j4["workflow_id"] is None
+    assert j4["style_id"] == job["style_id"]  # inherited from the parent
+    out4 = json.loads(j4["progress"])["outputs"]
+    assert out4["title"] == track["title"] and out4["theme_title"] == track["theme_title"]
+    assert out4["lyrics"] == fixed_lyrics and "orchestral ballad" in out4["style"]
+    req4 = dj.build_request(db, j4)
+    assert req4.abc is None and req4.parent_track_id == track_id and req4.seed == 77
+    assert req4.lyrics == fixed_lyrics and "orchestral ballad" in req4.style
+    # the placeholder keeps the title; render copies the parent's tags over
+    kid = library.create_track(
+        db, cfg, prompt_id=None, parent_track_id=track_id, workflow_id=None,
+        style_id=j4["style_id"], title=out4["title"], theme_title=out4["theme_title"],
+        style_text=req4.style, lyrics_snapshot=req4.lyrics, seed=req4.seed,
+        cot_mode="full")
+    for name in library.track_tags(db, track_id):
+        library.apply_track_tags(db, cfg, kid, [name])
+    assert set(library.track_tags(db, kid)) == set(library.track_tags(db, track_id))
+    kidrow = db.one("SELECT title FROM tracks WHERE id = ?", (kid,))
+    assert kidrow["title"] == "A Window Far Away"  # same song, repaired
+    # ...while a plain variation still re-renders the saved ABC
+    jid5 = dj.enqueue_job(db, prompt_id=pid, parent_track_id=track_id)
+    req5 = dj.build_request(db, db.one("SELECT * FROM generation_jobs WHERE id = ?", (jid5,)))
+    assert req5.abc == track["abc_text"] and req5.parent_track_id == track_id
+    print("re-compose: abc=None + edited lyrics + lineage; variation unchanged")
+
     # failure persists completed stages; retry resumes, not restarts
     jid3 = dj.enqueue_job(db, workflow_id="jp-title-first")
     failing = RT(cfg, db, rt.generator, MockLLMClient(fail_first={"tags": 2}), rt.workflows)
