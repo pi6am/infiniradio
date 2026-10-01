@@ -17,6 +17,12 @@
     {% if j.prompt_id %}<tr><th>prompt</th><td>{{ j.prompt_name or '—' }}</td></tr>{% endif %}
     <tr><th>track</th><td>{% if j.track_id %}<a href="/admin/track/{{ j.track_id }}">{{ j.track_id }}</a>{% else %}—{% endif %}</td></tr>
     <tr><th>seed</th><td class="muted">{{ j.seed or '—' }}</td></tr>
+    {% if j.used_seed is not none and j.used_seed != j.seed %}
+    <tr><th>render seed</th><td class="muted">{{ j.used_seed }}
+      <span title="the ABC audit rejected the first plan(s); a retry seed rendered">(audit retry substituted)</span></td></tr>
+    {% elif j.used_seed is not none %}
+    <tr><th>render seed</th><td class="muted">{{ j.used_seed }} (as requested)</td></tr>
+    {% endif %}
     <tr><th>created</th><td class="muted">{{ j.created_at }}</td></tr>
     <tr><th>finished</th><td class="muted">{{ j.finished_at or '' }}</td></tr>
     {% if j.error %}<tr><th>error</th><td style="color:var(--bad)">{{ j.error }}</td></tr>{% endif %}
@@ -42,9 +48,12 @@
     <tr><th>title</th><td>{{ outputs.title or '(fallback: seed title)' }}</td></tr>
     <tr><th>theme title</th><td>{{ outputs.theme_title or '—' }}</td></tr>
     <tr><th>tags</th><td class="muted">{{ outputs.tags | join(', ') }}</td></tr>
+    <tr><th>lyrics</th><td class="muted">{{ (outputs.lyrics or '') | length }} chars</td></tr>
   </table>
   <p class="muted" style="margin-bottom:0">style:</p>
   <pre class="abc">{{ outputs.style }}</pre>
+  <p class="muted" style="margin-bottom:0">lyrics (exactly what the render received):</p>
+  <pre class="abc">{{ outputs.lyrics }}</pre>
   {% endif %}
 </div>
 

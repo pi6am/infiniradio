@@ -424,6 +424,19 @@ def _fail_job(db: DB, job_id: int, error: str) -> None:
                (str(error)[:1000], iso(utcnow()), job_id))
 
 
+def _complete_job(db: DB, job_id: int, result) -> None:
+    """Mark a running job done, recording the seed that actually rendered
+    (result.info['seed'] — the requested seed unless the ABC audit retried
+    with a fresh one) and the ComfyUI prompt id for replay lookups."""
+    # Conditional on 'running': if the job was cancelled from the admin
+    # panel while we were generating, the cancellation wins.
+    db.execute(
+        "UPDATE generation_jobs SET status = 'done', finished_at = ?,"
+        " comfy_prompt_id = ?, used_seed = ? WHERE id = ? AND status = 'running'",
+        (iso(utcnow()), str(result.info.get("comfy_prompt_id", "")),
+         result.info.get("seed"), job_id))
+
+
 def _log_stage_attempt(db: DB, job_id: int, trace: AttemptTrace) -> None:
     """Persist one LLM exchange in job_stage_log (append-only diagnostics).
     Continuation rounds (truncation recovery) and the final call's raw
@@ -617,6 +630,15 @@ async def job_runner(rt) -> None:
                 )
                 db.execute("UPDATE generation_jobs SET track_id = ? WHERE id = ?",
                            (track_id, job["id"]))
+                # Permanent evidence of what the render was given (the job
+                # outputs card shows the full lyrics text; this line makes
+                # the server log answer "did the lyrics reach the submit?"
+                # without opening anything).
+                log.info("job %s: render submit — %s, seed %s, style %d chars,"
+                         " lyrics %d chars, abc %s", job["id"],
+                         outputs.get("title") or "variation/new", req.seed,
+                         len(req.style), len(req.lyrics),
+                         "fresh plan" if req.abc is None else "saved score")
                 if job["workflow_id"]:
                     log.info("job %s: rendering %r (workflow %s, seed %s)", job["id"],
                              outputs.get("title") or outputs.get("theme_title"),
@@ -638,11 +660,7 @@ async def job_runner(rt) -> None:
                     # Same song, repaired: the child carries the parent's tags.
                     for name in library.track_tags(db, job["parent_track_id"]):
                         library.apply_track_tags(db, cfg, track_id, [name])
-                # Conditional on 'running': if the job was cancelled from the
-                # admin panel while we were generating, the cancellation wins.
-                db.execute("UPDATE generation_jobs SET status = 'done', finished_at = ?,"
-                           " comfy_prompt_id = ? WHERE id = ? AND status = 'running'",
-                           (iso(utcnow()), str(result.info.get("comfy_prompt_id", "")), job["id"]))
+                _complete_job(db, job["id"], result)
             except Exception as exc:
                 log.exception("job %s failed", job["id"])
                 if track_id:

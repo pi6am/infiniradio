@@ -203,6 +203,22 @@ class ComfyUIGenerator(Generator):
         await self._maybe_cleanup()
         self._jobs_since_cleanup += 1
 
+        if req.abc is None and req.parent_track_id is not None:
+            # Supervised re-compose: an admin chose the lyrics and seed and
+            # verifies the output — no audit, no reseeding, single pass (the
+            # workflow plans internally via plan=true, then renders). The
+            # worst case for an over-long score is a truncated tail, which
+            # the admin sees and fixes (shorter lyrics / different seed).
+            result = await self._run_full(req, workdir)
+            abc_len = len(result.abc_text or "")
+            if abc_len > self._audit_thresholds.max_chars:
+                log.warning("re-compose %s: planned ABC is %d chars (> %d) — "
+                            "the render may cut off before the song ends; "
+                            "shorter lyrics or a different seed would fit",
+                            result.info.get("comfy_prompt_id", ""), abc_len,
+                            self._audit_thresholds.max_chars)
+            return result
+
         if req.abc is None and self._audit_enabled and "abc_save" in self.vars:
             return await self._generate_with_audit(req, workdir)
         return await self._run_full(req, workdir)
@@ -241,6 +257,7 @@ class ComfyUIGenerator(Generator):
         """Cheap pass: plan an ABC score, no audio render. Returns the text."""
         wf = self._patch_workflow(self._abc_only_subgraph(self._load_workflow()), req)
         prompt_id = await self._submit(wf)
+        log.info("comfy plan submit %s seed=%s", prompt_id, req.seed)
         entry = await self._wait_for_history(prompt_id)
         outputs = self._collect_outputs(entry, need_audio=False)
         if "abc" not in outputs:
@@ -258,9 +275,13 @@ class ComfyUIGenerator(Generator):
         """Single prompt: plan (or take the supplied ABC) and render audio."""
         wf = self._patch_workflow(self._load_workflow(), req)
         prompt_id = await self._submit(wf)
+        log.info("comfy render submit %s seed=%s abc=%s", prompt_id, req.seed,
+                 "supplied" if req.abc else "internal plan")
         entry = await self._wait_for_history(prompt_id)
         outputs = self._collect_outputs(entry)
-        return await self._download(outputs, workdir, prompt_id)
+        result = await self._download(outputs, workdir, prompt_id)
+        result.info["seed"] = int(req.seed)  # the seed that actually ran
+        return result
 
     async def _submit(self, wf: dict) -> str:
         try:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+from pathlib import Path
 
 import _helpers
 
@@ -15,7 +16,7 @@ _helpers.ensure_repo()
 
 from infiniradio import dj, library
 from infiniradio.db import DB
-from infiniradio.generator.base import GenRequest
+from infiniradio.generator.base import GenRequest, GenResult
 from infiniradio.generator.mock import MockGenerator
 from infiniradio.llm.mock import MockLLMClient
 from infiniradio.lyrics import load_workflows
@@ -180,6 +181,114 @@ async def _main(cfg, rt) -> None:
     assert job3["status"] == "queued" and job3["phase"] == "render"
     assert fresh.calls == 1, fresh.calls  # only the tags stage ran
     print("retry resumed at the tags stage only (1 LLM call)")
+
+    # recompose through the REAL route handler (the form path) with a
+    # recording generator, plus the real ComfyUI payload construction:
+    # the edited lyrics must survive byte-for-byte to the workflow node
+    from infiniradio.web import routes_admin
+
+    mangled = fixed_lyrics + "\n\nWait, let me re-examine. partial thinking\n\n" + fixed_lyrics
+    pid_parent = library.create_track(
+        db, cfg, prompt_id=None, parent_track_id=None, workflow_id="jp-title-first",
+        style_id=None, title="Disused Rounds", theme_title="Ember Puzzles",
+        style_text="a slow art-pop song", lyrics_snapshot=mangled, seed=12345678,
+        cot_mode="full")
+    db.execute("UPDATE tracks SET status = 'ready', abc_text = 'X:1 old',"
+               " playout_path = 'x', duration_s = 300 WHERE id = ?", (pid_parent,))
+
+    captured: dict = {}
+
+    class Recorder(MockGenerator):
+        async def generate(self, req, workdir):
+            captured["req"] = req
+            return await super().generate(req, workdir)
+
+    rt_rec = RT(cfg, db, Recorder(cfg), MockLLMClient(), rt.workflows)
+    fake_app = type("A", (), {})()
+    fake_app.state = type("S", (), {})()
+    fake_app.state.rt = rt_rec
+    FakeRequest = type("R", (), {"app": fake_app, "client": None})
+    real_admin, real_csrf = routes_admin._is_admin, routes_admin._csrf_ok
+    routes_admin._is_admin = lambda r: True
+    routes_admin._csrf_ok = lambda r, c: True
+    try:
+        resp = await routes_admin.track_vary_submit(
+            FakeRequest(), pid_parent, mode="recompose", style_prompt_id=0,
+            custom_style="a slow art-pop song", lyrics=fixed_lyrics,
+            title="Disused Rounds", seed=12345678, csrf="x")
+        assert resp.headers["location"] == "/admin/jobs"
+    finally:
+        routes_admin._is_admin, routes_admin._csrf_ok = real_admin, real_csrf
+
+    rjob = db.one("SELECT * FROM generation_jobs ORDER BY id DESC LIMIT 1")
+    rout = json.loads(rjob["progress"])["outputs"]
+    assert rjob["recompose"] == 1 and rout["lyrics"] == fixed_lyrics
+    rreq = dj.build_request(db, rjob)
+    assert rreq.lyrics == fixed_lyrics and rreq.abc is None and rreq.seed == 12345678
+    rtrack = library.create_track(
+        db, cfg, prompt_id=rjob["prompt_id"], parent_track_id=rjob["parent_track_id"],
+        workflow_id=rjob["workflow_id"], style_id=rjob["style_id"],
+        title=rout["title"], theme_title=rout["theme_title"], style_text=rreq.style,
+        lyrics_snapshot=rreq.lyrics, seed=rreq.seed, cot_mode=rreq.cot_mode)
+    result = await rt_rec.generator.generate(rreq, library.track_dir(cfg, rtrack))
+    await library.ingest(db, cfg, rtrack, result, tags=None)
+    assert captured["req"].lyrics == fixed_lyrics  # the generator got the edited text
+    kid = db.one("SELECT title, lyrics_snapshot FROM tracks WHERE id = ?", (rtrack,))
+    assert kid["title"] == "Disused Rounds" and kid["lyrics_snapshot"] == fixed_lyrics
+    assert result.info["seed"] == 12345678  # effective seed travels in the result
+
+    # job completion records the EFFECTIVE render seed (retry substitutions
+    # are exactly what used to be unrecorded and un-replayable)
+    db.execute("UPDATE generation_jobs SET status = 'running' WHERE id = ?", (rjob["id"],))
+    dj._complete_job(db, rjob["id"], result)
+    done = db.one("SELECT status, used_seed, comfy_prompt_id FROM generation_jobs"
+                  " WHERE id = ?", (rjob["id"],))
+    assert done["status"] == "done" and done["used_seed"] == 12345678
+    db.execute("UPDATE generation_jobs SET status = 'running', used_seed = NULL"
+               " WHERE id = ?", (rjob["id"],))
+    dj._complete_job(db, rjob["id"], GenResult(
+        original_path=Path("x.flac"), abc_text="",
+        info={"seed": 999, "comfy_prompt_id": "p1"}))
+    retry = db.one("SELECT used_seed FROM generation_jobs WHERE id = ?", (rjob["id"],))
+    assert retry["used_seed"] == 999  # audit-retry substitution is captured
+    print("job completion records the effective render seed (incl. retries)")
+
+    # the real ComfyUI payload construction against the station's workflow
+    # JSON (no HTTP): both the render pass and the pruned planning pass
+    # must carry the edited lyrics in the lyrics node
+    from infiniradio.generator.comfyui import ComfyUIGenerator
+    cgen = ComfyUIGenerator(cfg)
+    full_wf = cgen._patch_workflow(cgen._load_workflow(), rreq)
+    assert cgen._node(full_wf, "lyrics")["inputs"]["value"] == fixed_lyrics
+    plan_wf = cgen._patch_workflow(cgen._abc_only_subgraph(cgen._load_workflow()), rreq)
+    assert cgen._node(plan_wf, "lyrics")["inputs"]["value"] == fixed_lyrics
+    print("recompose route->render->comfy chain: edited lyrics intact end-to-end")
+
+    # dispatch: recompose (abc=None + parent) takes the supervised single
+    # pass — no audit, no reseeding; fresh songs keep the audit; variations
+    # re-render the saved ABC directly
+    from dataclasses import replace as _dc_replace
+
+    calls: list[str] = []
+
+    async def fake_full(req, workdir):
+        calls.append("full")
+        return GenResult(original_path=workdir / "x.flac", abc_text="X:1 T: K:C c")
+
+    async def fake_audit(req, workdir):
+        calls.append("audit")
+        return GenResult(original_path=workdir / "x.flac", abc_text="X:1 T: K:C c")
+
+    cgen._run_full = fake_full
+    cgen._generate_with_audit = fake_audit
+    import tempfile as _tf
+    wd = Path(_tf.mkdtemp(prefix="infiniradio-dispatch-", dir=_tf.gettempdir()))
+    await cgen.generate(rreq, wd)                                    # recompose
+    await cgen.generate(_dc_replace(rreq, parent_track_id=None), wd)  # fresh song
+    await cgen.generate(_dc_replace(rreq, abc="X:1 saved"), wd)       # variation
+    assert calls == ["full", "audit", "full"], calls
+    print("generator dispatch: recompose=single-pass, fresh=audited, "
+          "variation=saved-abc")
 
 
 def run() -> None:

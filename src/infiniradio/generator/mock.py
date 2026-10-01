@@ -62,4 +62,5 @@ class MockGenerator(Generator):
             raise RuntimeError(f"mock ffmpeg failed: {err.decode(errors='replace').strip()}")
         log.info("mock: generated %.0fs tone at %.0f Hz (seed %s)", duration, freq, req.seed)
         return GenResult(original_path=out, abc_text=fake_abc(req),
-                         info={"duration_s": duration, "frequency": freq})
+                         info={"duration_s": duration, "frequency": freq,
+                               "seed": int(req.seed)})

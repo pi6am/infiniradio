@@ -237,6 +237,14 @@ MIGRATIONS: dict[int, str] = {
     -- lyrics job; render-time abc=None routes through audited planning.
     ALTER TABLE generation_jobs ADD COLUMN recompose INTEGER NOT NULL DEFAULT 0;
     """,
+    12: """
+    -- Reproducibility: the seed actually submitted to ComfyUI for the
+    -- render. Usually equals the job's requested seed, EXCEPT when the
+    -- ABC audit rejected the first plan(s) and a retry seed was drawn —
+    -- those were previously unrecorded, making failed renders impossible
+    -- to replay. (Plan-pass seeds live in the server log.)
+    ALTER TABLE generation_jobs ADD COLUMN used_seed INTEGER;
+    """,
 }
 
 

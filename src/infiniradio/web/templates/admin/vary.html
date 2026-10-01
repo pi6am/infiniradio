@@ -46,7 +46,7 @@
     <input type="text" name="custom_style" value="{{ t.style_text }}">
     <label>lyrics — edit and fix; a fresh ABC is planned from exactly this text</label>
     <textarea name="lyrics" rows="20" style="font-family:monospace">{{ t.lyrics_snapshot }}</textarea>
-    <label>seed (0 = fresh random)</label>
+    <label>seed (0 = fresh random; used as-is — recompose runs one pass, no audit retries)</label>
     <input type="number" name="seed" value="0" min="0">
     <div style="margin-top:14px">
       <button type="submit" style="border-color:var(--accent)">queue re-compose</button>

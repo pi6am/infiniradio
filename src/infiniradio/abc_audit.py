@@ -132,17 +132,19 @@ def main() -> None:
 
     files: list[tuple[str, Path]] = []
     votes: dict[str, tuple[int, int, int]] = {}  # label -> (up, down, protected)
+    lyrics_chars: dict[str, int] = {}             # label -> lyrics length (ratio col)
     if args.library:
         # Read-only: safe to point at a running station's data dir.
         con = sqlite3.connect(f"file:{Path(args.library) / 'infiniradio.db'}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
         for r in con.execute(
-                "SELECT id, duration_s, vote_up, vote_down, protected FROM tracks"
-                " WHERE status != 'deleted' AND abc_text != ''"):
+                "SELECT id, duration_s, vote_up, vote_down, protected, lyrics_snapshot"
+                " FROM tracks WHERE status != 'deleted' AND abc_text != ''"):
             files.append((f"#{r['id']} ({r['duration_s'] or 0:.0f}s)",
                           Path(args.library) / "music" / str(r["id"]) / "score.abc"))
             votes[f"#{r['id']}"] = (r["vote_up"] or 0, r["vote_down"] or 0,
                                     int(r["protected"] or 0))
+            lyrics_chars[f"#{r['id']}"] = len(r["lyrics_snapshot"] or "")
         con.close()
     else:
         files = [(str(p), p) for p in map(Path, args.paths)]
@@ -161,15 +163,17 @@ def main() -> None:
 
     if args.vs_votes:
         print(f"{'score':>16} {'wil':>5} {'prot':>4} {'chars':>6} {'rep':>4} "
-              f"{'dup%':>4} {'est_s':>5}  verdict")
+              f"{'dup%':>4} {'est_s':>5} {'abc:lyr':>6}  verdict")
         scored = []
         for label, text, s, (ok, why) in rows:
             u, d, prot = votes.get(label.split(" ")[0], (0, 0, 0))
             w = _wilson(u, d)
             scored.append((w, prot, s))
+            lyr = lyrics_chars.get(label.split(" ")[0]) or 0
+            ratio = f"{s['chars'] / lyr:.1f}x" if lyr > 200 else "—"
             print(f"{label:>16} {w:>5.2f} {'yes' if prot else '-':>4} "
                   f"{s['chars']:>6} {s['max_line_repeats']:>4} "
-                  f"{s['dup_ratio']*100:>4.0f}% {s['est_duration_s']:>5}  "
+                  f"{s['dup_ratio']*100:>4.0f}% {s['est_duration_s']:>5} {ratio:>6}  "
                   f"{'ok' if ok else 'REJECT: ' + why}")
         ws = [r[0] for r in scored]
         print(f"\ncorrelation with Wilson score (n={len(scored)}):")
@@ -190,11 +194,13 @@ def main() -> None:
         return
 
     rejected = 0
-    print(f"{'score':>16} {'chars':>6} {'lines':>5} {'est_s':>5}  verdict")
+    print(f"{'score':>16} {'chars':>6} {'lines':>5} {'est_s':>5} {'abc:lyr':>6}  verdict")
     for label, text, s, (ok, why) in rows:
         rejected += not ok
+        lyr = lyrics_chars.get(label.split(" ")[0]) or 0
+        ratio = f"{s['chars'] / lyr:.1f}x" if lyr > 200 else "—"
         print(f"{label:>16} {s['chars']:>6} {s['body_lines']:>5} "
-              f"{s['est_duration_s']:>5}  {'ok' if ok else 'REJECT: ' + why}")
+              f"{s['est_duration_s']:>5} {ratio:>6}  {'ok' if ok else 'REJECT: ' + why}")
     print(f"\n{len(rows) - rejected}/{len(rows)} accepted, {rejected} rejected"
           f"  (max_chars={th.max_chars})")
 
