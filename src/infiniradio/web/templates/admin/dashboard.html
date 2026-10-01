@@ -125,6 +125,11 @@
     {% elif llm.ok %}<span class="pill ok">reachable</span>
       <span class="muted">{{ llm.model or 'default model' }}</span>
     {% else %}<span class="pill err">unreachable</span> <span class="muted">{{ llm.error }}</span>{% endif %}
+    {% if tag_vocab_n is not none %}
+      {% if tag_vocab_n %}<br><span class="muted">{{ tag_vocab_n }} pickable tag(s)</span>
+      {% else %}<br><span class="pill err">0 pickable tags</span>
+        <span class="muted">tagging degrades — check tags.toml / the startup log</span>{% endif %}
+    {% endif %}
     {% if llm.warning %}<p style="color:var(--bad);margin:8px 0 0">{{ llm.warning }}</p>{% endif %}
   </div>
 </div>

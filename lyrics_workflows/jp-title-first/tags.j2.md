@@ -1,5 +1,6 @@
-Choose the tags that best describe this song, from this list only:
+{% if tags %}Choose the tags that best describe this song, from this list only:
 {{ tags | join(", ") }}
+{% else %}Choose 2 to 4 lowercase genre tags that best describe this song{% endif %}
 
 Style prompt: {{ style_prompt }}
 

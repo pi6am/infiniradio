@@ -714,11 +714,13 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
             result.lyrics = str(vars_.get(spec.output.lyrics, "") or "")
             dynamic = parse_tag_list(str(vars_.get(spec.output.tags, "") or "")) \
                 if spec.output.tags else []
-            if tag_vocabulary:
+            if tag_vocabulary is not None:
                 # Sanitize: keep only known tags. A thinking-leak reply
                 # mentions plenty of words — only vocabulary matches count,
                 # so 30k chars of deliberation still yields a clean (or
-                # empty) pick, with no LLM round-trip spent on it.
+                # empty) pick, with no LLM round-trip spent on it. An EMPTY
+                # vocabulary sanitizes to nothing (station misconfiguration:
+                # statics only), it must not mean "accept anything".
                 allowed = {t.lower() for t in tag_vocabulary}
                 dynamic = [t for t in dynamic if t in allowed]
             if spec.output.max_tags is not None:

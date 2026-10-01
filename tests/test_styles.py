@@ -151,7 +151,23 @@ async def _main(cfg, rt) -> None:
 def run() -> None:
     cfg, tmp = isolated_config()
     try:
+        # Regression: allow_new_tags = false must not block the SEEDERS —
+        # a fresh station with it set used to end up with an empty (and
+        # therefore broken) tag vocabulary.
+        object.__setattr__(cfg, "_d", {**cfg._d, "lyrics":
+                                       {**cfg._d["lyrics"], "allow_new_tags": False}})
         db = DB(tmp / "infiniradio.db")
+        library.import_prompts(db, cfg)
+        library.seed_tags(db, cfg)
+        assert len(library.tag_vocabulary(db)) >= 30, library.tag_vocabulary(db)
+        assert {"chiptune", "ambient"} <= {t for p in db.query("SELECT * FROM prompts")
+                                           for t in library.prompt_tags(db, p["id"])}
+        # runtime picks stay gated: an unknown tag is NOT created on ingest
+        assert library.apply_track_tags(db, cfg, 1, ["brand-new-genre"]) == []
+        assert db.one("SELECT COUNT(*) AS n FROM tags WHERE name = 'brand-new-genre'"
+                      )["n"] == 0
+        print("0. allow_new_tags=false seeds the vocabulary, gates only runtime picks")
+
         rt = RT(cfg, db, MockGenerator(cfg), MockLLMClient(), load_workflows(cfg))
         asyncio.run(_main(cfg, rt))
         print("test_styles: ALL PASSED")

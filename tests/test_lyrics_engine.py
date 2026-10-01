@@ -319,6 +319,17 @@ the true end"""
     assert all("reasoning_effort" not in (kw.get("extra") or {}) for kw in others)
     print("10. per-stage max_tokens/reasoning_effort/extra reach the client")
 
+    # 11. empty tag vocabulary: the prompt degrades coherently (no phantom
+    #     "from this list only"), picks sanitize to nothing, statics survive
+    r = await run_workflow(MockLLMClient(), spec, initial_vars={"title": "Glass Ember"},
+                           tag_vocabulary=[])
+    assert r.ok, r.error
+    tags_prompt = next(t.prompt_text for t in r.attempts if t.stage_id == "tags")
+    assert "from this list only" not in tags_prompt
+    assert "genre tags" in tags_prompt
+    assert r.tags == ["vocal", "english"], r.tags
+    print("11. empty vocabulary -> coherent fallback prompt, statics only")
+
 
 def run() -> None:
     asyncio.run(_main())

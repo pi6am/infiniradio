@@ -139,6 +139,7 @@ async def dashboard(request: Request):
     )
     gen_status = await rt.generator.status() if rt.generator else {"backend": "off", "ok": None}
     llm_status = await rt.llm.status() if rt.llm else {"backend": "off", "ok": None}
+    tag_vocab_n = len(library.tag_vocabulary(db)) if rt.llm is not None else None
     jobs = db.query("SELECT j.*, p.name AS prompt_name, st.name AS style_name, pt.title AS parent_title"
                     " FROM generation_jobs j"
                     " LEFT JOIN prompts p ON p.id = j.prompt_id"
@@ -167,6 +168,7 @@ async def dashboard(request: Request):
         request, "admin/dashboard.html",
         _ctx(request,
              np=np, quota=quota, stats=stats, gen=gen_status, llm=llm_status, jobs=jobs,
+             tag_vocab_n=tag_vocab_n,
              feeder_track=feeder_track, queue=queue,
              gen_manual_paused=bool(db.get_setting("generation_paused")),
              gen_paused=gen_paused, gen_reason=gen_reason,

@@ -325,18 +325,20 @@ def normalize_tag(name: str) -> str:
     return name.strip().strip("`\"'").strip().lower()
 
 
-def _tag_id(db: DB, cfg: Config, name: str) -> int | None:
+def _tag_id(db: DB, name: str, *, allow_new: bool = True) -> int | None:
     """Get-or-create a vocabulary tag; None when the name is unusable or
-    unknown tags are not allowed (lyrics.allow_new_tags = false). New tags
-    are created llm_pickable = 0 (not offered to the LLM until tags.toml
-    adopts them)."""
+    creation is disabled. Curated content (tags.toml seeds, prompt/style
+    tags from imports and the admin panel) always creates — allow_new
+    governs only RUNTIME picks (lyrics.allow_new_tags), never the
+    seeders: gating those made a fresh station with
+    allow_new_tags = false unable to build any vocabulary at all."""
     name = normalize_tag(name)
     if not name:
         return None
     row = db.one("SELECT id FROM tags WHERE name = ?", (name,))
     if row is not None:
         return row["id"]
-    if not bool(cfg.get("lyrics.allow_new_tags", True)):
+    if not allow_new:
         return None
     return db.execute("INSERT INTO tags (name, created_at) VALUES (?, ?)",
                       (name, iso(utcnow())))
@@ -367,11 +369,11 @@ def seed_tags(db: DB, cfg: Config) -> int:
     if not llm and not static:
         return 0
     for name in llm:
-        tag_id = _tag_id(db, cfg, name)
+        tag_id = _tag_id(db, name)   # curated: always creatable
         if tag_id:
             db.execute("UPDATE tags SET llm_pickable = 1 WHERE id = ?", (tag_id,))
     for name in static:
-        tag_id = _tag_id(db, cfg, name)
+        tag_id = _tag_id(db, name)
         if tag_id:
             db.execute("UPDATE tags SET llm_pickable = 0 WHERE id = ?", (tag_id,))
     if llm:
@@ -380,10 +382,14 @@ def seed_tags(db: DB, cfg: Config) -> int:
 
 
 def apply_track_tags(db: DB, cfg: Config, track_id: int, names: list[str]) -> list[str]:
-    """Link tags to a track (get-or-create each). Returns the applied names."""
+    """Link tags to a track. This is the one RUNTIME-gated path: unknown
+    names are created only when lyrics.allow_new_tags is true (engine-side
+    sanitization already limits picks to the vocabulary, so this mostly
+    covers workflow static tags the vocabulary hasn't adopted yet)."""
+    allow_new = bool(cfg.get("lyrics.allow_new_tags", True))
     applied: list[str] = []
     for name in names:
-        tag_id = _tag_id(db, cfg, name)
+        tag_id = _tag_id(db, name, allow_new=allow_new)
         if tag_id is None:
             continue
         db.execute("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?, ?)",
@@ -393,10 +399,11 @@ def apply_track_tags(db: DB, cfg: Config, track_id: int, names: list[str]) -> li
 
 
 def apply_prompt_tags(db: DB, cfg: Config, prompt_id: int, names: list[str]) -> list[str]:
-    """Same for prompts (static tags from the seed files)."""
+    """Same for prompts (static tags from the seed files / admin panel —
+    curated, so tag creation is never blocked here)."""
     applied: list[str] = []
     for name in names:
-        tag_id = _tag_id(db, cfg, name)
+        tag_id = _tag_id(db, name)
         if tag_id is None:
             continue
         db.execute("INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES (?, ?)",
@@ -424,9 +431,10 @@ def style_tags(db: DB, style_id: int) -> list[str]:
 
 
 def apply_style_tags(db: DB, cfg: Config, style_id: int, names: list[str]) -> list[str]:
+    """Style tags (seed files + admin panel — curated, always creatable)."""
     applied: list[str] = []
     for name in names:
-        tag_id = _tag_id(db, cfg, name)
+        tag_id = _tag_id(db, name)
         if tag_id is None:
             continue
         db.execute("INSERT OR IGNORE INTO style_tags (style_id, tag_id) VALUES (?, ?)",

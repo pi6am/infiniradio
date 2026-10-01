@@ -140,6 +140,8 @@ DEFAULTS: dict[str, Any] = {
         # Tags picked by a workflow's tagging stage that are not already in
         # the vocabulary: true = add them, false = drop them. (Picks are
         # sanitized against the vocabulary before this ever applies.)
+        # Scope: RUNTIME picks only — tags.toml seeds and admin-panel
+        # prompt/style tags are curated and always import regardless.
         "allow_new_tags": True,
     },
     "tags": {

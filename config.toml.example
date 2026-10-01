@@ -91,8 +91,9 @@ workflows_dir = "lyrics_workflows"
 # while a render is in progress. false (default) = separate machines/GPUs:
 # the next job's lyrics generate while the current job renders.
 serialize_with_render = false
-# Tags picked by a workflow's tagging stage that aren't already in the
-# vocabulary: true = add them, false = drop them.
+# Runtime LLM tag picks outside the vocabulary: true = add them, false =
+# drop them. Seeds (tags.toml, prompt/style tags) are curated and always
+# import regardless of this flag.
 allow_new_tags = true
 
 # Two-pass fresh-song generation: the ABC is planned in a cheap text-only

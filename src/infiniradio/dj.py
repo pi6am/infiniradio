@@ -437,6 +437,14 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
     initial: dict[str, Any] = dict(overrides)
     if spec.seed_title:
         initial["title"] = theme_title
+    vocab = library.tag_vocabulary(db)
+    if not vocab:
+        # Not fatal (static tags still apply; LLM picks sanitize to nothing),
+        # but the tagging stage degrades and this is almost certainly a
+        # misconfiguration: check the startup log line "tag vocabulary:".
+        log.warning("job %s: tag vocabulary is EMPTY — the tagging stage runs "
+                    "without its list and LLM tag picks are dropped. Check "
+                    "tags.toml / the 'tag vocabulary:' startup log line.", job["id"])
 
     def guard() -> bool:
         row = db.one("SELECT status FROM generation_jobs WHERE id = ?", (job["id"],))
@@ -469,7 +477,7 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
     async def _work() -> None:
         result = await lyrics.run_workflow(
             rt.llm, spec, initial_vars=initial,
-            tag_vocabulary=library.tag_vocabulary(db),
+            tag_vocabulary=vocab,
             progress=progress, guard=guard,
             on_attempt=lambda tr: _log_stage_attempt(db, job["id"], tr),
             on_stage=on_stage,
