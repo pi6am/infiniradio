@@ -57,6 +57,18 @@ feedback_template = "feedback.j2.md"  # optional; without it the same prompt
                                  # is re-sent (nondeterminism retry)
 model = "other-model"            # optional per-stage [llm] overrides
 temperature = 0.8                #   (A/B test models within one workflow)
+max_tokens = 12288               # optional per-stage output budget: most
+                                 # stages need far less than the global
+                                 # default; refine (rhyme/rhythm guides)
+                                 # often needs more
+reasoning_effort = "low"         # optional: dial back reasoning on stages
+                                 # that overthink (supported by OpenAI,
+                                 # DeepSeek, GLM endpoints; ignored safely
+                                 # by servers that don't know it)
+[stage.extra]                    # optional: arbitrary extra request body
+enable_thinking = false          # parameters — the provider-specific escape
+                                 # hatch (Qwen3's enable_thinking, vLLM's
+                                 # chat_template_kwargs, ...)
 
 [stage.gate]
 max_chars = 3000                 # too_long
@@ -88,9 +100,14 @@ burning LLM round-trips on retries:
 1. the first fenced block whose content contains a section header is the
    song (header patterns default to the stage's own gate `any_of`/`all_of`,
    else the generic `[Header]`-on-its-own-line shape);
-2. with no matching fence, the reply is a bare song: a `[Title]` section is
-   stripped and anything before the first section header (leading
-   commentary prose) is dropped;
+2. with no matching fence, the reply is a bare song: the LAST contiguous
+   header/lyrics run is the song — leading commentary prose and any leaked
+   work-in-progress drafts before it are dropped. Runs split where the text
+   between two consecutive headers turns prose-like (deliberation about
+   stanzas and rhyme schemes), and at any **late `[Intro]`**: [Intro] is
+   only ever a song's first section, so one appearing after other headers
+   marks a continuation seam where a truncated model rewrote the song from
+   the top instead of resuming — the second copy is the final answer;
 3. a leading `[Title]` section is always removed — the song's name travels
    via `[output] title`, never inside the lyrics.
 
@@ -110,7 +127,11 @@ mid-stream, up to `llm.max_continuations` times. Continuations are
 transport, not content retries — they never consume `max_attempts`; a
 reply still truncated after the bound fails the attempt with code
 `truncated` (never parsed into a song: a partial is often a leaked
-work-in-progress draft, not the answer).
+work-in-progress draft, not the answer). Truncation detection is
+case-insensitive (`"LENGTH"` is reported by some servers), and the raw
+`finish_reason` of every exchange is recorded in the stage log's
+`usage_json` — if a song ever looks cut off in the output, that field
+tells you what the server claimed happened.
 Extraction keys accept an ordered list of alternative patterns (first
 match wins) — e.g. a `Name:` line in backticks, quotes, or bare — so
 output-style variation parses locally instead of costing LLM round-trips.

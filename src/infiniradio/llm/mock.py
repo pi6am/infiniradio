@@ -134,6 +134,7 @@ class MockLLMClient(LLMClient):
         # the full canned reply — exercising the engine's continuation path.
         self.truncate_first = {k.lower(): n for k, n in (truncate_first or {}).items()}
         self.calls = 0
+        self.last_extra: dict = {}
         self._sticky: str | None = None  # last matched stage keyword
 
     def _keyword(self, messages: list[Message]) -> str | None:
@@ -149,8 +150,10 @@ class MockLLMClient(LLMClient):
 
     async def chat(self, messages: list[Message], *, model: str | None = None,
                    temperature: float | None = None,
-                   max_tokens: int | None = None) -> Reply:
+                   max_tokens: int | None = None,
+                   extra: dict | None = None) -> Reply:
         self.calls += 1
+        self.last_extra = dict(extra or {})  # recorded for tests/diagnostics
         key = self._keyword(messages)
         if key is not None:
             self._sticky = key
@@ -171,9 +174,10 @@ class MockLLMClient(LLMClient):
             self.truncate_first[key.lower()] -= 1
             content = next((reply for needle, reply in SCRIPT if needle == key), FALLBACK)
             return Reply(content=content[:60], truncated=True, model=model or "mock",
+                         finish_reason="length",
                          usage={"prompt_tokens": 10, "completion_tokens": 60})
         content = next((reply for needle, reply in SCRIPT if needle == key), FALLBACK)
-        return Reply(content=content, model=model or "mock",
+        return Reply(content=content, model=model or "mock", finish_reason="stop",
                      usage={"prompt_tokens": len(messages[-1].content) // 4,
                             "completion_tokens": len(content) // 4
                             + random.randint(0, 20)})

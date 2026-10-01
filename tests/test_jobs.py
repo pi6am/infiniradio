@@ -52,7 +52,10 @@ async def _main(cfg, rt) -> None:
     stage_rows = db.query("SELECT * FROM job_stage_log WHERE job_id = ? ORDER BY id",
                           (job_id,))
     assert len(stage_rows) == 7 and all(r["response_text"] for r in stage_rows)
-    print(f"lyrics phase done: 7 stages logged, title={outputs['title']!r}")
+    assert all(json.loads(r["usage_json"]).get("finish_reason") == "stop"
+               for r in stage_rows)  # diagnostics recorded per exchange
+    print(f"lyrics phase done: 7 stages logged (+ finish_reasons), "
+          f"title={outputs['title']!r}")
 
     # phase timings recorded; the detail-page breakdown computes from them
     from infiniradio.util import iso, parse_iso, utcnow

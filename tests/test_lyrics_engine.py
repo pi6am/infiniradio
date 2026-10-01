@@ -175,7 +175,39 @@ No shadow"""
     assert got.endswith("No shadow"), got[-60:]
     plain = "[Verse 1]\nshort lines\nmore lines\n\n[Verse 2]\nmore\nlines\n\n[Outro]\nend"
     assert extract_song_block(plain) == plain
-    print("6. extract_song_block shapes ok (draft+deliberation -> last run)")
+    # The continuation-seam specimen: a truncated reply's continuation
+    # RESTARTED the song (leaving a short thinking fragment between the
+    # copies) instead of resuming — a late [Intro] marks the restart, and
+    # the last run (the model's final copy) wins.
+    seam = """\
+[Intro]
+Break, break, it's okay to break
+Break, break, it's okay to break
+
+[Verse 1]
+holding words of the first copy
+
+[Outro]
+Break, break, it's okay to break
+
+Hmm, let me re-examine. The user wants "a fast
+
+[Intro]
+Break, break, it's okay to break
+Break, break, it's okay to break
+
+[Verse 1]
+final words of the second copy
+
+[Outro]
+the true end"""
+    got = extract_song_block(seam)
+    assert got.count("[Intro]") == 1, got[:80]
+    assert got.startswith("[Intro]\nBreak, break, it's okay to break")
+    assert "let me re-examine" not in got and "first copy" not in got
+    assert got.endswith("the true end"), got[-40:]
+    print("6. extract_song_block shapes ok (draft+deliberation -> last run; "
+          "continuation-seam restart -> late-[Intro] split)")
 
     # 7. liberal song-name parsing (the #1 retry source on the real endpoint)
     from infiniradio.lyrics import _evaluate
@@ -218,13 +250,18 @@ No shadow"""
         mock_mod.SCRIPT[-1] = old_entry
     print("8. tag sanitization ok (tolerance, leak -> statics, filter+truncate)")
 
-    # 9. truncation: client reports it; engine continues; exhaustion fails
-    #    with code "truncated" and the feedback retry recovers
+    # 9. truncation: client reports it (any casing — servers emit "LENGTH");
+    #    engine continues; exhaustion fails with code "truncated" and the
+    #    feedback retry recovers. Per-stage knobs reach the client.
     from infiniradio.llm.openai_compat import OpenAICompatClient
     reply = OpenAICompatClient._parse(
         {"choices": [{"message": {"content": "partial"}, "finish_reason": "length"}],
          "usage": {"completion_tokens": 100}})
-    assert reply.truncated and reply.content == "partial"
+    assert reply.truncated and reply.content == "partial" and \
+        reply.finish_reason == "length"
+    upper = OpenAICompatClient._parse(
+        {"choices": [{"message": {"content": "cut"}, "finish_reason": "LENGTH"}]})
+    assert upper.truncated and upper.finish_reason == "LENGTH"  # the prod bug
     assert not OpenAICompatClient._parse(
         {"choices": [{"message": {"content": "done"}, "finish_reason": "stop"}]}).truncated
 
@@ -234,12 +271,13 @@ No shadow"""
     assert r.ok, r.error
     tr = [t for t in r.attempts if t.stage_id == "refine"]
     assert len(tr) == 1 and tr[0].ok and tr[0].continuations == 1
+    assert tr[0].finish_reason == "stop"  # the final (successful) call's value
     assert tr[0].usage["completion_tokens"] > 60  # both calls' tokens summed
     assert "[Outro]" in r.lyrics and "Here's the revised" not in r.lyrics
     assert len(r.progress["threads"]["refine"]) == 4  # user, partial, continue, full
-    print("9a. truncation continuation ok (tokens summed, thread carries turns)")
+    print("9a. truncation continuation ok (any-casing detection, tokens summed)")
 
-    mock = MockLLMClient(truncate_first={"Rewrite the words of this song": 2})
+    mock = MockLLMClient(truncate_first={"Rewrite the words of this song": 9})
     r = await run_workflow(mock, spec, initial_vars={"title": "Glass Ember"},
                            tag_vocabulary=VOCAB, max_continuations=0)
     assert not r.ok and "truncated" in r.error, r.error
@@ -251,6 +289,35 @@ No shadow"""
     tr = [t for t in r.attempts if t.stage_id == "refine"]
     assert len(tr) == 2 and "cut off" in tr[1].prompt_text
     print("9b. truncation exhaustion -> 'truncated'; feedback retry recovers")
+
+    # 10. per-stage generation knobs reach the client: max_tokens,
+    #     reasoning_effort and arbitrary extra body parameters
+    from dataclasses import replace as _replace
+
+    tuned = _replace(spec, stages=tuple(
+        _replace(s, max_tokens=2048, reasoning_effort="low",
+                 extra={"enable_thinking": False}) if s.id == "brainstorm" else s
+        for s in spec.stages))
+    seen: list[dict] = []
+    inner = MockLLMClient()
+
+    class Recorder:
+        name = "recorder"
+
+        async def chat(self, messages, **kw):
+            seen.append(dict(kw))
+            return await inner.chat(messages, **kw)
+
+    r = await run_workflow(Recorder(), tuned, initial_vars={"title": "Glass Ember"},
+                           tag_vocabulary=VOCAB)
+    assert r.ok, r.error
+    assert seen[0]["max_tokens"] == 2048
+    assert seen[0]["extra"] == {"enable_thinking": False, "reasoning_effort": "low"}
+    others = [kw for kw in seen[1:]]
+    assert all(kw.get("max_tokens") is None or kw["max_tokens"] == 12288
+               for kw in others if kw)  # refine carries its own budget now
+    assert all("reasoning_effort" not in (kw.get("extra") or {}) for kw in others)
+    print("10. per-stage max_tokens/reasoning_effort/extra reach the client")
 
 
 def run() -> None:

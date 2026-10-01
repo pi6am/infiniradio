@@ -127,7 +127,10 @@ template = "refine.j2.md"
 # YuE2. The gate applies to the extracted block, not the raw reply.
 block = "final_lyrics"
 thread = "new"
-max_attempts = 2
+max_attempts = 3
+# Rhyme/rhythm guides make this stage think (and write) the most — give it
+# more output room than the global default so the song actually finishes.
+max_tokens = 12288
 feedback_template = "feedback.j2.md"
 
 [stage.gate]

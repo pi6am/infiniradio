@@ -33,9 +33,10 @@ class Reply:
     content: str
     model: str = ""
     usage: dict[str, int] = field(default_factory=dict)  # prompt/completion/total tokens
-    truncated: bool = False        # finish_reason == "length": the reply was cut
-                                   # off mid-stream by the output budget; the
-                                   # caller (workflow engine) may continue it
+    truncated: bool = False        # finish_reason = length (any casing): the reply
+                                   # was cut off mid-stream by the output budget;
+                                   # the caller (workflow engine) may continue it
+    finish_reason: str = ""        # raw provider value, recorded for diagnostics
 
 
 class LLMError(Exception):
@@ -48,8 +49,14 @@ class LLMClient(ABC):
     @abstractmethod
     async def chat(self, messages: list[Message], *, model: str | None = None,
                    temperature: float | None = None,
-                   max_tokens: int | None = None) -> Reply:
-        """One chat completion. Raises LLMError on failure."""
+                   max_tokens: int | None = None,
+                   extra: dict | None = None) -> Reply:
+        """One chat completion. Raises LLMError on failure.
+
+        extra: arbitrary additional body parameters (reasoning_effort,
+        enable_thinking, chat_template_kwargs, ...) merged into the request
+        — the escape hatch for provider-specific generation controls.
+        """
 
     async def status(self) -> dict[str, Any]:
         """Backend health/info for the admin dashboard."""

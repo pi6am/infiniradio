@@ -71,7 +71,8 @@ class OpenAICompatClient(LLMClient):
 
     async def chat(self, messages: list[Message], *, model: str | None = None,
                    temperature: float | None = None,
-                   max_tokens: int | None = None) -> Reply:
+                   max_tokens: int | None = None,
+                   extra: dict | None = None) -> Reply:
         payload: dict[str, Any] = {
             "model": model or self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -79,6 +80,8 @@ class OpenAICompatClient(LLMClient):
             "max_tokens": max_tokens if max_tokens is not None else self.max_output_tokens,
             "stream": False,
         }
+        if extra:
+            payload.update(extra)
         attempts = self.transport_retries + 1
         for attempt in range(1, attempts + 1):
             retry_after: float | None = None
@@ -108,7 +111,11 @@ class OpenAICompatClient(LLMClient):
         if not choices or not isinstance(choices[0], dict):
             raise LLMError(f"malformed completion reply: {str(data)[:400]}")
         content = (choices[0].get("message") or {}).get("content")
-        truncated = str(choices[0].get("finish_reason") or "") == "length"
+        finish_reason = str(choices[0].get("finish_reason") or "")
+        # Case-insensitive: servers report "length" as "LENGTH" (or any
+        # casing) — missing this let visually-truncated songs through as
+        # complete when the engine trusted a strict comparison.
+        truncated = finish_reason.strip().lower() == "length"
         # An empty reply is normally fatal; an empty TRUNCATED one may just
         # mean the whole budget went to thinking — the engine's continuation
         # can still recover it.
@@ -116,7 +123,7 @@ class OpenAICompatClient(LLMClient):
             raise LLMError(f"empty completion content: {str(data)[:400]}")
         usage = data.get("usage") or {}
         return Reply(content=content, model=str(data.get("model", "")),
-                     truncated=truncated,
+                     truncated=truncated, finish_reason=finish_reason,
                      usage={k: int(v) for k, v in usage.items() if isinstance(v, (int, float))})
 
     async def status(self) -> dict[str, Any]:

@@ -75,7 +75,8 @@ RESERVED_VARS = frozenset({"title", "params", "tags", "failures", "failed",
 _WORKFLOW_KEYS = {"name", "description", "enabled", "tags", "seed_title",
                   "params", "vars", "styled", "output", "stage"}
 _STAGE_KEYS = {"id", "template", "saves", "block", "extract", "thread",
-               "max_attempts", "feedback_template", "model", "temperature", "gate"}
+               "max_attempts", "feedback_template", "model", "temperature",
+               "max_tokens", "reasoning_effort", "extra", "gate"}
 _GATE_KEYS = {"max_chars", "min_chars", "all_of", "any_of", "forbidden"}
 _OUTPUT_KEYS = {"title", "style", "lyrics", "tags", "max_tags"}
 
@@ -127,6 +128,16 @@ class StageSpec:
     feedback_template: str | None = None       # rendered with the failures
     model: str | None = None         # per-stage [llm] overrides (A/B testing)
     temperature: float | None = None
+    max_tokens: int | None = None    # per-stage output budget: most stages
+                                     # need far less than the global default;
+                                     # refine (with rhyme/rhythm guides) may
+                                     # need more
+    reasoning_effort: str | None = None   # e.g. "low"/"medium"/"high" — dial
+                                     # back reasoning on stages that overthink
+    extra: dict[str, Any] = field(default_factory=dict)  # extra request body
+                                     # params (enable_thinking,
+                                     # chat_template_kwargs, ...) — the
+                                     # provider-specific escape hatch
     gate: GateSpec | None = None     # applies to the song block when block is set
 
 
@@ -182,6 +193,8 @@ class AttemptTrace:
     duration_s: float = 0.0
     vars_snapshot: dict[str, str] = field(default_factory=dict)
     continuations: int = 0
+    finish_reason: str = ""          # raw provider value of the final call —
+                                     # diagnostics for truncation detection
 
     @property
     def failure_text(self) -> str:
@@ -306,8 +319,25 @@ def _parse_stage(data: dict, where: str) -> StageSpec:
                            if data.get("feedback_template") else None),
         model=(str(data["model"]) if data.get("model") else None),
         temperature=(float(data["temperature"]) if data.get("temperature") is not None else None),
+        max_tokens=(int(data["max_tokens"]) if data.get("max_tokens") is not None else None),
+        reasoning_effort=(str(data["reasoning_effort"]).strip().lower()
+                          if data.get("reasoning_effort") else None),
+        extra=_parse_stage_extra(data.get("extra"), where),
         gate=gate,
     )
+
+
+def _parse_stage_extra(data: Any, where: str) -> dict[str, Any]:
+    """A stage's [stage.extra] table: arbitrary request body parameters,
+    string-keyed and JSON-compatible (TOML guarantees the value types)."""
+    if not data:
+        return {}
+    if not isinstance(data, dict):
+        raise WorkflowError(f"{where}: extra must be a TOML table of body parameters")
+    for key in data:
+        if not isinstance(key, str) or not key:
+            raise WorkflowError(f"{where}: extra keys must be strings, got {key!r}")
+    return dict(data)
 
 
 def load_workflow(directory: Path) -> WorkflowSpec:
@@ -478,18 +508,28 @@ def _prose_gap(gap: str) -> bool:
     return long_lines >= 2 or len(body) > _PROSE_MAX_LYRIC_LINES
 
 
+def _header_tag(line: str) -> str:
+    m = re.match(r"\s*\[([^\]\n]+)\]", line)
+    return m.group(1).strip().lower() if m else ""
+
+
 def _last_song_run_start(text: str) -> int | None:
     """Start of the last contiguous header/lyrics run in the text.
 
     A completed reply whose thinking leaked may contain a work-in-progress
-    draft, deliberation about it, and THEN the final song; the final answer
-    is always the last run, so runs split wherever the text between two
-    consecutive headers turns prose-like.
+    draft, deliberation about it, and THEN the final song — the final answer
+    is always the last run. Runs split wherever the text between two
+    consecutive headers turns prose-like, and — critically — at any LATE
+    [Intro]: [Intro] is only ever a song's first section, so an [Intro]
+    after other headers marks a restart (the continuation seam where a
+    truncated model rewrote the song from the top instead of resuming,
+    leaving a short thinking fragment between the two copies).
     """
     starts: list[int] = []
     prev: int | None = None
     for m in re.finditer(_GENERIC_SECTION_RE, text):
-        if prev is None or _prose_gap(text[prev:m.start()]):
+        if prev is None or _prose_gap(text[prev:m.start()]) or \
+                _header_tag(m.group(0)) == "intro":
             starts.append(m.start())
         prev = m.start()
     return starts[-1] if starts else None
@@ -737,14 +777,20 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
             model_name = ""
             continuations = 0
             ended_truncated = False
+            finish_reason = ""
+            stage_extra = dict(stage.extra)
+            if stage.reasoning_effort:
+                stage_extra.setdefault("reasoning_effort", stage.reasoning_effort)
             t0 = time.monotonic()
             try:
                 for rnd in range(max(0, max_continuations) + 1):
                     reply = await client.chat(
-                        conv, model=stage.model, temperature=stage.temperature)
+                        conv, model=stage.model, temperature=stage.temperature,
+                        max_tokens=stage.max_tokens, extra=stage_extra or None)
                     parts.append(reply.content)
                     _usage_add(usage, reply.usage)
                     model_name = reply.model or model_name
+                    finish_reason = reply.finish_reason or finish_reason
                     ended_truncated = reply.truncated
                     if not reply.truncated:
                         break
@@ -791,7 +837,7 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
             trace = AttemptTrace(stage.id, attempt, prompt, full_text,
                                  failures, ok, model_name, usage,
                                  time.monotonic() - t0, vars_snapshot,
-                                 continuations)
+                                 continuations, finish_reason)
             result.attempts.append(trace)
             if on_attempt:
                 on_attempt(trace)
