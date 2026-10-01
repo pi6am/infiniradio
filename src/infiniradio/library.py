@@ -537,12 +537,10 @@ def import_styles(db: DB, cfg: Config, only_new: bool = True) -> int:
 # ---------------------------------------------------------------- prompt seeds
 
 def import_prompts(db: DB, cfg: Config, only_new: bool = True) -> int:
-    """Import TOML prompt files from prompts.seed_dir. Skips existing names.
-
-    Also seeds each prompt's tags: the file's ``tags`` list when present,
-    else (backfill for pre-tag stations) the prompt name split on
-    dashes/underscores — "chiptune-upbeat" -> chiptune, upbeat.
-    """
+    """Import TOML prompt files from prompts.seed_dir. Skips existing names
+    unless only_new is false (the admin "re-import seeds" button), which
+    updates definitions in place. Tags come only from the file's explicit
+    ``tags`` list — nothing is ever derived from prompt names."""
     seed_dir = cfg.path("prompts.seed_dir")
     if not seed_dir.is_dir():
         return 0
@@ -566,32 +564,22 @@ def import_prompts(db: DB, cfg: Config, only_new: bool = True) -> int:
                     "UPDATE prompts SET style_text = ?, song_text = ?, cot_mode = ? WHERE id = ?",
                     (style, song, str(data.get("cot") or "full"), exists["id"]),
                 )
+                prompt_id = exists["id"]
             else:
-                db.execute(
+                prompt_id = db.execute(
                     "INSERT INTO prompts (name, style_text, song_text, cot_mode, enabled, created_at)"
                     " VALUES (?, ?, ?, ?, 1, ?)",
                     (name, style, song, str(data.get("cot") or "full"), iso(utcnow())),
                 )
+            # Tags come ONLY from the seed file's explicit `tags` list —
+            # never derived from the prompt's slug name (name-splitting
+            # produced junk like '8' + 'bit' from an "8-bit" prompt, and it
+            # ran over admin-created prompts at every boot).
+            if file_tags[name]:
+                apply_prompt_tags(db, cfg, prompt_id, file_tags[name])
             imported += 1
         except Exception as exc:
             log.warning("prompt seed %s failed: %s", f.name, exc)
     if imported:
         log.info("imported %d prompt(s) from %s", imported, seed_dir)
-
-    # Tag seeding / backfill (idempotent: prompts that already have tags
-    # keep them — after first boot the database is the source of truth).
-    seeded = 0
-    for p in db.query("SELECT id, name FROM prompts"):
-        if db.one("SELECT 1 FROM prompt_tags WHERE prompt_id = ? LIMIT 1", (p["id"],)):
-            continue
-        names = file_tags.get(p["name"])
-        if not names:
-            parts = [part for part in re.split(r"[-_]+", p["name"].lower()) if part]
-            # "chiptune-upbeat" -> chiptune, upbeat — but "8-bit" must stay
-            # whole: split only when every fragment is a real word.
-            names = parts if all(part.isalpha() for part in parts) else [p["name"].lower()]
-        if apply_prompt_tags(db, cfg, p["id"], names):
-            seeded += 1
-    if seeded:
-        log.info("seeded tags for %d prompt(s)", seeded)
     return imported
