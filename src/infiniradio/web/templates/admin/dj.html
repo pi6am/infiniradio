@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block bodyclass %}wide{% endblock %}
+{% block title %}admin — dj{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">dj — next pick</h2>
+    <div>
+      {% for s in sizes %}
+      <a class="btn" href="/admin/dj?n={{ s }}"
+         style="{% if s == n %}border-color:var(--accent){% endif %}">top {{ s }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <p class="muted" style="margin:8px 0">
+    {{ eligible_n }} eligible track{{ '' if eligible_n == 1 else 's' }}
+    ({{ fresh_n }} never-played · fresh share {{ '%.0f'|format(share * 100) }}% ·
+    {{ excluded_n }} excluded as airing/queued) ·
+    repeat windows: {% if strict %}strict ({{ win_t }} tracks / {{ win_h }}h){% else %}
+    <b>relaxed to {{ win_t }} tracks / {{ '%.2f'|format(win_h) }}h — the library is
+    starving the strict windows</b>{% endif %}
+    <br>weight = quality × novelty × uncertainty; p(next) is the exact pick
+    probability including the reserved fresh-share draw.
+  </p>
+  <table>
+    <tr><th>p(next)</th><th>title</th><th>weight</th><th>quality</th>
+        <th>novelty</th><th>uncertainty</th><th>wilson</th>
+        <th title="plays inside the novelty window">recent</th>
+        <th>plays</th><th>votes</th><th>listens</th></tr>
+    {% for e in top %}
+    <tr>
+      <td><b>{{ '%.2f'|format(e.prob * 100) }}%</b></td>
+      <td><a href="/admin/track/{{ e.id }}">{{ e.title or '—' }}</a>
+        {% if e.play_count == 0 %}<span class="pill">fresh</span>{% endif %}</td>
+      <td class="muted">{{ '%.2f'|format(e.weight) }}</td>
+      <td class="muted">{{ '%.2f'|format(e.quality) }}</td>
+      <td class="muted">{{ '%.2f'|format(e.novelty) }}</td>
+      <td class="muted">{{ '%.2f'|format(e.uncertainty) }}</td>
+      <td class="muted">{{ '%.2f'|format(e.wilson) }}</td>
+      <td class="muted">{{ e.recent_plays }}</td>
+      <td class="muted">{{ e.play_count }}</td>
+      <td class="muted">▲{{ e.vote_up }} ▼{{ e.vote_down }}</td>
+      <td class="muted">{{ e.listener_count or 0 }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="11" class="muted">nothing eligible — the feeder is airing silence</td></tr>
+    {% endfor %}
+    {% if rest_n %}
+    <tr>
+      <td><b>{{ '%.2f'|format(rest_p * 100) }}%</b></td>
+      <td colspan="10" class="muted">everything else — {{ rest_n }} track{{ '' if rest_n == 1 else 's' }} below the cut</td>
+    </tr>
+    {% endif %}
+  </table>
+</div>
+{% endblock %}

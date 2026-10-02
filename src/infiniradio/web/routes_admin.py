@@ -372,6 +372,38 @@ async def library_page(request: Request, status: str = "ready",
              **_library_view(rt.db, status, sort, dir, page)))
 
 
+# ------------------------------------------------------------------ dj debug
+
+DJ_PAGE_SIZES = (25, 50, 100, 250, 500)
+
+
+@router.get("/dj", response_class=HTMLResponse)
+async def dj_page(request: Request, n: int = 100):
+    """The DJ's next-pick distribution: eligible tracks with each weight
+    factor and their exact pick probability (fresh-share mixture
+    included), most probable first — refresh to re-run the math."""
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    exclude: set[int] = set()
+    if rt.feeder is not None:
+        # mirror what the feeder actually excludes: the track being
+        # written right now and everything sitting in the manual queue
+        exclude = rt.feeder.active_ids | rt.feeder.queued_ids()
+    dist = dj.pick_distribution(rt.db, rt.cfg, exclude)
+    entries = sorted(dist["entries"], key=lambda e: -e["prob"])
+    n = max(10, min(n, 1000))
+    top, rest = entries[:n], entries[n:]
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/dj.html",
+        _ctx(request, top=top, rest_n=len(rest),
+             rest_p=sum(e["prob"] for e in rest), n=n,
+             sizes=DJ_PAGE_SIZES, win_t=dist["windows"][0],
+             win_h=dist["windows"][1], strict=dist["strict"],
+             fresh_n=dist["fresh_n"], share=dist["share"],
+             eligible_n=len(entries), excluded_n=dist["excluded_n"]))
+
+
 @router.get("/aired", response_class=HTMLResponse)
 async def aired_page(request: Request, n: int = 100):
     """Airing history: every play_log entry, newest first.

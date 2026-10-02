@@ -100,8 +100,9 @@ def run() -> None:
             # the walk stops at the FIRST non-empty level: (3, 45m), whose
             # last-3-rows window excludes C/D/E and leaves the two rested
             # tracks -- A (the crowd favorite) and B
-            relaxed = dj._relaxed_eligible(db3, cfg3, set())
+            relaxed, win_t, win_h = dj._relaxed_eligible(db3, cfg3, set())
             assert {t["id"] for t in relaxed} == {a, b}
+            assert (win_t, win_h) == (3, 0.75)       # the stopping level
             random.seed(20261002)
             picks = [dj.pick_next(db3, cfg3)["id"] for _ in range(40)]
             assert picks.count(a) >= 30, picks.count(a)
@@ -109,17 +110,64 @@ def run() -> None:
             # 20/40 (the old LRP fallback always took the oldest, too)
             print(f"4. starvation keeps scores: 'A' picked {picks.count(a)}/40"
                   f" of a relaxed {{{len(relaxed)}}}-track pool")
+
+            # 6. the debug distribution mirrors the picker exactly:
+            # probabilities sum to 1, the window level is reported, and
+            # the fresh-share mixture matches the two-branch draw
+            dist = dj.pick_distribution(db3, cfg3, set())
+            assert not dist["strict"] and dist["windows"] == (3, 0.75)
+            assert abs(sum(e["prob"] for e in dist["entries"]) - 1.0) < 1e-9
+            # no fresh tracks here: p = w / sum(w), no share multiplier
+            ws = {e["id"]: e["weight"] for e in dist["entries"]}
+            tot = sum(ws.values())
+            for e in dist["entries"]:
+                assert abs(e["prob"] - ws[e["id"]] / tot) < 1e-12
+            print("5. distribution without fresh: p = w/sum(w), level reported")
+            cfg4, tmp4 = isolated_config()
+            try:
+                db4 = DB(tmp4 / "infiniradio.db")
+                for i in range(5):
+                    _add(db4, f"n{i}")
+                # all-fresh library: the uniform branch always fires
+                dist = dj.pick_distribution(db4, cfg4, set())
+                assert dist["strict"]                     # never aired: windows moot
+                assert all(abs(e["prob"] - 0.2) < 1e-9 for e in dist["entries"])
+
+                # mixed: one seasoned track strictly eligible (aired 40h ago,
+                # outside the last-2 rows) beside the five fresh ones —
+                # fresh gets share/n_fresh + (1-share)*w/tot, seasoned
+                # gets (1-share)*w/tot
+                db4.set_setting("dj.repeat_window_tracks", 2)
+                s1 = _add(db4, "s1", play_count=1)
+                s2 = _add(db4, "s2", play_count=1, listener_count=8)
+                s3 = _add(db4, "s3", play_count=1)
+                for tid, age in ((s2, 40.0), (s1, 30.0), (s3, 20.0)):
+                    _air(db4, tid, age_h=age)     # chronological row order
+                dist = dj.pick_distribution(db4, cfg4, set())
+                assert dist["fresh_n"] == 5 and dist["share"] == 0.35
+                assert {e["id"] for e in dist["entries"]} == \
+                    {s2} | {db4.one("SELECT id FROM tracks WHERE title = ?", (f"n{i}",))["id"] for i in range(5)}
+                ws = {e["id"]: e["weight"] for e in dist["entries"]}
+                tot = sum(ws.values())
+                fe = next(e for e in dist["entries"] if e["title"] == "n0")
+                se = next(e for e in dist["entries"] if e["id"] == s2)
+                assert abs(fe["prob"] - (0.35 / 5 + 0.65 * ws[fe["id"]] / tot)) < 1e-12
+                assert abs(se["prob"] - 0.65 * ws[s2] / tot) < 1e-12
+                assert abs(sum(e["prob"] for e in dist["entries"]) - 1.0) < 1e-9
+                print("6. mixed distribution: exact fresh-share mixture")
+            finally:
+                shutil.rmtree(tmp4, ignore_errors=True)
         finally:
             shutil.rmtree(tmp3, ignore_errors=True)
 
-        # 5. empty / held libraries still go silent, never crash
+        # 7. empty / held libraries still go silent, never crash
         cfg2, tmp2 = isolated_config()
         try:
             db2 = DB(tmp2 / "infiniradio.db")
             assert dj.pick_next(db2, cfg2) is None          # empty library
             _add(db2, "held", hold=1)
             assert dj.pick_next(db2, cfg2) is None          # only held tracks
-            print("5. empty and held-only libraries -> None (silence)")
+            print("7. empty and held-only libraries -> None (silence)")
         finally:
             shutil.rmtree(tmp2, ignore_errors=True)
 

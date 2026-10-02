@@ -99,20 +99,25 @@ def eligible_tracks(db: DB, cfg, exclude_ids: set[int] = set(),
             and (r["last_played_at"] is None or r["last_played_at"] <= cutoff)]
 
 
-def _relaxed_eligible(db: DB, cfg: Config, exclude_ids: set[int]) -> list[dict]:
+def _relaxed_eligible(db: DB, cfg: Config, exclude_ids: set[int]) \
+        -> tuple[list[dict], int, float]:
     """Strict repeat windows first, then halve both limits until something
     is eligible — starvation stays inside the weighted pick (scores,
     novelty, exploration) instead of dropping to a score-blind
     least-recently-played fallback. The final step (0, 0) admits any
     ready, unheld track; if even that is empty the library is truly
-    empty (or fully held) and the feeder airs silence."""
+    empty (or fully held) and the feeder airs silence.
+
+    Returns (eligible rows, window tracks, window hours) — the window
+    levels are the walk's stopping point, reported by the admin DJ tab
+    so starvation is visible when it happens."""
     tracks_n = int(runtime_get(cfg, db, "dj.repeat_window_tracks"))
     hours = float(runtime_get(cfg, db, "dj.repeat_window_hours"))
     while True:
         eligible = eligible_tracks(db, cfg, exclude_ids,
                                    window_tracks=tracks_n, window_hours=hours)
         if eligible or (tracks_n <= 0 and hours <= 0):
-            return eligible
+            return eligible, tracks_n, hours
         tracks_n //= 2
         hours /= 2.0
         if tracks_n <= 0:      # don't chase hours toward zero forever
@@ -130,8 +135,11 @@ def recent_play_counts(db: DB, cfg) -> dict[int, int]:
         " WHERE started_at > ? GROUP BY track_id", (cutoff,))}
 
 
-def _pick_weight(cfg, db, track: dict, recent_plays: int) -> float:
-    """Selection weight = quality x novelty x uncertainty.
+def _pick_factors(cfg, db, track: dict, recent_plays: int) \
+        -> tuple[float, float, float]:
+    """(quality, novelty, uncertainty) — the selection weight is their
+    product. Broken out (rather than one formula) so the admin DJ tab
+    can show each factor next to the probability it produces.
 
     quality      exp(wilson / temperature) — listener verdicts steer the
                  mix (softmax floor: even a 0-score track keeps weight 1).
@@ -149,17 +157,69 @@ def _pick_weight(cfg, db, track: dict, recent_plays: int) -> float:
     """
     votes = (track["vote_up"] or 0) + (track["vote_down"] or 0)
     score = wilson_score(track["vote_up"], track["vote_down"])
+    quality = math.exp(score / SOFTMAX_TEMPERATURE)
     x = max(1e-6, float(runtime_get(cfg, db, "dj.novelty_plays_scale")))
     novelty = x / (x + recent_plays)
     b = float(runtime_get(cfg, db, "dj.uncertainty_bonus"))
     a = float(runtime_get(cfg, db, "dj.uncertainty_listener_weight"))
     evidence = votes + a * (track["listener_count"] or 0)
     uncertainty = 1.0 + b / math.sqrt(1.0 + max(0.0, evidence))
-    return math.exp(score / SOFTMAX_TEMPERATURE) * novelty * uncertainty
+    return quality, novelty, uncertainty
+
+
+def _pick_weight(cfg, db, track: dict, recent_plays: int) -> float:
+    q, nov, unc = _pick_factors(cfg, db, track, recent_plays)
+    return q * nov * unc
+
+
+def pick_distribution(db: DB, cfg: Config, exclude_ids: set[int] = set()) -> dict:
+    """The picker's exact next-pick distribution, for the admin DJ tab.
+
+    Mirrors pick_next's decision math without drawing: relaxed
+    eligibility, each track's weight factors, and the normalized
+    probability including the fresh-share mixture (a never-played track
+    gets its slice of the reserved share PLUS its weighted-share chance,
+    exactly as the two-branch draw in pick_next produces).
+    """
+    eligible, win_t, win_h = _relaxed_eligible(db, cfg, exclude_ids)
+    share = float(runtime_get(cfg, db, "dj.new_track_share"))
+    fresh_ids = {r["id"] for r in eligible if r["play_count"] == 0}
+    recent = recent_play_counts(db, cfg)
+
+    entries = []
+    total_w = 0.0
+    for r in eligible:
+        q, nov, unc = _pick_factors(cfg, db, r, recent.get(r["id"], 0))
+        w = q * nov * unc
+        total_w += w
+        entries.append(dict(r) | {
+            "wilson": wilson_score(r["vote_up"], r["vote_down"]),
+            "quality": q, "novelty": nov, "uncertainty": unc, "weight": w,
+            "recent_plays": recent.get(r["id"], 0), "prob": 0.0,
+        })
+
+    all_fresh = bool(entries) and len(fresh_ids) == len(entries)
+    for e in entries:
+        if all_fresh:
+            e["prob"] = 1.0 / len(entries)          # uniform branch always fires
+        elif fresh_ids:
+            # weighted branch fires with the remaining 1 - share
+            p = (1.0 - share) * (e["weight"] / total_w if total_w else 0.0)
+            if e["id"] in fresh_ids:                # ... plus a share of the
+                p += share / len(fresh_ids)         # reserved uniform draw
+            e["prob"] = p
+        else:
+            e["prob"] = e["weight"] / total_w if total_w else 0.0
+    return {"entries": entries, "windows": (win_t, win_h),
+            "strict": (win_t, win_h) == (
+                int(runtime_get(cfg, db, "dj.repeat_window_tracks")),
+                float(runtime_get(cfg, db, "dj.repeat_window_hours"))),
+            "fresh_n": len(fresh_ids), "share": share,
+            "recent_n": len(recent), "excluded_n": len(exclude_ids)}
 
 
 def pick_next(db: DB, cfg: Config, exclude_ids: set[int] = set()) -> dict | None:
-    eligible = _relaxed_eligible(db, cfg, exclude_ids)
+    eligible, _, _ = _relaxed_eligible(db, cfg, exclude_ids)
     if not eligible:
         return None  # empty (or fully held) library — the feeder airs silence
 
