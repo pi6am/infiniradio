@@ -108,10 +108,32 @@ async def _main(rt, cfg) -> None:
     print(f"continuity: next airing starts at prog {rows[1]['prog_offset']:.1f}s"
           f" (the cut), aired {rows[1]['played_s']:.1f}s more")
 
+    # every airing counts a play (a regression once made this UPDATE dead
+    # code while the play_log INSERT kept working — tracks replayed during
+    # that window froze at their old counts)
+    assert db.one("SELECT play_count AS pc FROM tracks WHERE id = ?",
+                  (tid,))["pc"] == 2
+    print("play_count: both airings counted")
+
     # mark_aired hands back the row id (the clamp above depends on it)
     rid = library.mark_aired(db, tid, "2026-01-01T00:00:00",
                              prog_offset=1.0, epoch=7)
     assert rid == db.one("SELECT MAX(id) AS m FROM play_log")["m"]
+
+    # migration 13 repairs the frozen window from play_log: counts ratchet
+    # UP to the airing rows, never down (counts above the row count are
+    # legitimate — the old skip behavior deleted a flushed airing's row)
+    db.execute("UPDATE tracks SET play_count = 1 WHERE id = ?", (tid,))
+    db.execute("DELETE FROM schema_version WHERE version >= 13")
+    db.migrate()
+    assert db.one("SELECT play_count AS pc FROM tracks WHERE id = ?",
+                  (tid,))["pc"] == 3   # three airing rows now
+    db.execute("UPDATE tracks SET play_count = 99 WHERE id = ?", (tid,))
+    db.execute("DELETE FROM schema_version WHERE version >= 13")
+    db.migrate()
+    assert db.one("SELECT play_count AS pc FROM tracks WHERE id = ?",
+                  (tid,))["pc"] == 99
+    print("migration 13: ratchets frozen counts up to airing rows, never lowers")
 
 
 def run() -> None:

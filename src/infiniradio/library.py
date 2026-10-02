@@ -300,13 +300,14 @@ def mark_aired(db: DB, track_id: int, airtime_iso: str,
         db.execute("UPDATE tracks SET last_played_at = ? WHERE id = ?",
                    (airtime_iso, track_id))
         return resume_row_id
-    return db.execute(
+    row_id = db.execute(
         "INSERT INTO play_log (track_id, started_at, prog_offset, epoch)"
         " VALUES (?, ?, ?, ?)", (track_id, airtime_iso, prog_offset, epoch))
     db.execute(
         "UPDATE tracks SET play_count = play_count + 1, last_played_at = ? WHERE id = ?",
         (airtime_iso, track_id),
     )
+    return row_id
 
 
 def my_votes(db: DB, listener_id: str) -> dict[int, int]:

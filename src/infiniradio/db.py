@@ -245,6 +245,21 @@ MIGRATIONS: dict[int, str] = {
     -- to replay. (Plan-pass seeds live in the server log.)
     ALTER TABLE generation_jobs ADD COLUMN used_seed INTEGER;
     """,
+    13: """
+    -- Data repair: play_count stopped incrementing for a window (a code
+    -- regression left the increment unreachable while the play_log INSERT
+    -- kept working), so airings from that window have rows but no count.
+    -- play_log is the complete airing record — ratchet each track's count
+    -- up to its number of rows. The MAX() direction matters: counts may
+    -- legitimately exceed row counts (the old skip behavior deleted a
+    -- flushed airing's row without decrementing), so never lower one.
+    UPDATE tracks SET play_count = (
+      SELECT COUNT(*) FROM play_log WHERE play_log.track_id = tracks.id
+    )
+    WHERE play_count < (
+      SELECT COUNT(*) FROM play_log WHERE play_log.track_id = tracks.id
+    );
+    """,
 }
 
 
