@@ -1,9 +1,19 @@
 """The DJ: track selection, generation commissioning, job execution.
 
-Selection: weighted sampling over eligible (ready, not recently aired) tracks
-using Wilson scores, with a share of picks reserved for never-played tracks so
-new music gets airtime and can earn votes. Falls back to least-recently-played
-when nothing is eligible, so the stream never starves.
+Selection: weighted sampling over eligible (ready, not recently aired)
+tracks. The weight is quality x novelty x uncertainty: quality is a softmax
+over Wilson scores (listener verdicts steer the mix); novelty discounts a
+track by its plays inside a recent window — a soft spacing tilt that
+RECOVERS with time, unlike the old permanent play-count fatigue; and
+uncertainty gives under-evidenced tracks a bounded exploration bonus
+(votes count as evidence, listeners weakly, plays not at all — a song that
+aired to nobody at 3am keeps its bonus until enough people have actually
+heard it). A share of picks is reserved for never-played tracks so new
+music gets airtime and can earn votes. When nothing passes the repeat
+windows, the windows halve progressively until something does — starvation
+stays inside the weighted pick rather than dropping to a score-blind
+fallback — so the stream never starves (and only a truly empty library
+goes silent).
 
 Commissioning: just-in-time and demand-driven. A single job is commissioned
 only when the "runway" — eligible material that can air without violating
@@ -51,7 +61,6 @@ from .util import iso, utcnow, wilson_score
 log = logging.getLogger(__name__)
 
 SOFTMAX_TEMPERATURE = 0.35
-PLAY_COUNT_FATIGUE = 0.05
 COMMISSION_TICK_S = 60.0
 JANITOR_TICK_S = 120.0
 JOB_POLL_S = 2.0
@@ -66,13 +75,23 @@ def recent_track_ids(db: DB, n: int) -> set[int]:
     return {r["track_id"] for r in rows}
 
 
-def eligible_tracks(db: DB, cfg, exclude_ids: set[int] = set()) -> list[dict]:
+def eligible_tracks(db: DB, cfg, exclude_ids: set[int] = set(),
+                    window_tracks: int | None = None,
+                    window_hours: float | None = None) -> list[dict]:
     """Ready tracks the DJ may pick right now without violating the repeat
     windows: not among the most recent repeat_window_tracks airs, not
     played within repeat_window_hours. Trashed and held tracks are
-    never eligible (hold is the admin's 'never air this' switch)."""
-    last_n = recent_track_ids(db, runtime_get(cfg, db, "dj.repeat_window_tracks"))
-    cutoff = iso(utcnow() - timedelta(hours=runtime_get(cfg, db, "dj.repeat_window_hours")))
+    never eligible (hold is the admin's 'never air this' switch).
+
+    The window overrides exist for pick_next's starvation relaxation
+    only — commissioning's runway measures STRICT eligibility, so a
+    starving station keeps generating new music."""
+    tracks_n = int(runtime_get(cfg, db, "dj.repeat_window_tracks")
+                   if window_tracks is None else window_tracks)
+    hours = float(runtime_get(cfg, db, "dj.repeat_window_hours")
+                  if window_hours is None else window_hours)
+    last_n = recent_track_ids(db, tracks_n)
+    cutoff = iso(utcnow() - timedelta(hours=hours))
     rows = db.query("SELECT * FROM tracks WHERE status = 'ready' AND hold = 0")
     return [r for r in rows
             if r["id"] not in last_n
@@ -80,29 +99,77 @@ def eligible_tracks(db: DB, cfg, exclude_ids: set[int] = set()) -> list[dict]:
             and (r["last_played_at"] is None or r["last_played_at"] <= cutoff)]
 
 
-def pick_next(db: DB, cfg: Config, exclude_ids: set[int] = set()) -> dict | None:
-    eligible = eligible_tracks(db, cfg, exclude_ids)
+def _relaxed_eligible(db: DB, cfg: Config, exclude_ids: set[int]) -> list[dict]:
+    """Strict repeat windows first, then halve both limits until something
+    is eligible — starvation stays inside the weighted pick (scores,
+    novelty, exploration) instead of dropping to a score-blind
+    least-recently-played fallback. The final step (0, 0) admits any
+    ready, unheld track; if even that is empty the library is truly
+    empty (or fully held) and the feeder airs silence."""
+    tracks_n = int(runtime_get(cfg, db, "dj.repeat_window_tracks"))
+    hours = float(runtime_get(cfg, db, "dj.repeat_window_hours"))
+    while True:
+        eligible = eligible_tracks(db, cfg, exclude_ids,
+                                   window_tracks=tracks_n, window_hours=hours)
+        if eligible or (tracks_n <= 0 and hours <= 0):
+            return eligible
+        tracks_n //= 2
+        hours /= 2.0
+        if tracks_n <= 0:      # don't chase hours toward zero forever
+            hours = 0.0
 
+
+def recent_play_counts(db: DB, cfg) -> dict[int, int]:
+    """Plays per track inside the novelty window — the recency input to
+    pick weighting. One indexed query per pick; plays older than the
+    window stop counting, which is what makes novelty recover."""
+    hours = float(runtime_get(cfg, db, "dj.novelty_window_hours"))
+    cutoff = iso(utcnow() - timedelta(hours=hours))
+    return {r["track_id"]: r["n"] for r in db.query(
+        "SELECT track_id, COUNT(*) AS n FROM play_log"
+        " WHERE started_at > ? GROUP BY track_id", (cutoff,))}
+
+
+def _pick_weight(cfg, db, track: dict, recent_plays: int) -> float:
+    """Selection weight = quality x novelty x uncertainty.
+
+    quality      exp(wilson / temperature) — listener verdicts steer the
+                 mix (softmax floor: even a 0-score track keeps weight 1).
+    novelty      X / (X + recent plays): a soft spacing tilt on top of the
+                 hard repeat windows. Recent plays halve the factor at
+                 X = dj.novelty_plays_scale, and the factor RECOVERS as
+                 plays age out of the window — unlike the old play-count
+                 fatigue, which ratcheted down forever.
+    uncertainty  1 + B / sqrt(1 + votes + a*listeners): a bounded
+                 exploration bonus for under-evidenced tracks. Votes count
+                 as evidence, listeners weakly, total plays not at all —
+                 so a track that aired to nobody at 3am keeps its bonus
+                 (nobody heard it, nothing was learned) while
+                 heard-and-ignored fades toward baseline.
+    """
+    votes = (track["vote_up"] or 0) + (track["vote_down"] or 0)
+    score = wilson_score(track["vote_up"], track["vote_down"])
+    x = max(1e-6, float(runtime_get(cfg, db, "dj.novelty_plays_scale")))
+    novelty = x / (x + recent_plays)
+    b = float(runtime_get(cfg, db, "dj.uncertainty_bonus"))
+    a = float(runtime_get(cfg, db, "dj.uncertainty_listener_weight"))
+    evidence = votes + a * (track["listener_count"] or 0)
+    uncertainty = 1.0 + b / math.sqrt(1.0 + max(0.0, evidence))
+    return math.exp(score / SOFTMAX_TEMPERATURE) * novelty * uncertainty
+
+
+def pick_next(db: DB, cfg: Config, exclude_ids: set[int] = set()) -> dict | None:
+    eligible = _relaxed_eligible(db, cfg, exclude_ids)
     if not eligible:
-        # Nothing eligible (tiny library): fall back to least-recently-played.
-        rest = [r for r in db.query(
-            "SELECT * FROM tracks WHERE status = 'ready' AND hold = 0")
-            if r["id"] not in exclude_ids]
-        if not rest:
-            return None
-        rest.sort(key=lambda r: (r["last_played_at"] is not None, r["last_played_at"] or ""))
-        return rest[0]
+        return None  # empty (or fully held) library — the feeder airs silence
 
     share = runtime_get(cfg, db, "dj.new_track_share")
     fresh = [r for r in eligible if r["play_count"] == 0]
     if fresh and (not eligible_without_fresh(eligible) or random.random() < share):
         return random.choice(fresh)
 
-    weights = []
-    for r in eligible:
-        score = wilson_score(r["vote_up"], r["vote_down"])
-        w = math.exp(score / SOFTMAX_TEMPERATURE) / (1.0 + PLAY_COUNT_FATIGUE * r["play_count"])
-        weights.append(w)
+    recent = recent_play_counts(db, cfg)
+    weights = [_pick_weight(cfg, db, r, recent.get(r["id"], 0)) for r in eligible]
     return random.choices(eligible, weights=weights, k=1)[0]
 
 

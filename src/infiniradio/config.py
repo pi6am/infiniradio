@@ -192,6 +192,19 @@ RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
     "dj.repeat_window_tracks": (25, int, "Repeat window (tracks)", "Do not play a track again within the last N aired tracks"),
     "dj.repeat_window_hours": (6.0, float, "Repeat window (hours)", "Do not play a track again within N hours"),
     "dj.new_track_share": (0.35, float, "New track share", "Fraction of picks reserved for never-played tracks (exploration)"),
+    "dj.novelty_window_hours": (48.0, float, "Novelty window (hours)",
+                                "Plays newer than this count against a track's novelty weight; older plays "
+                                "are forgotten (the novelty factor recovers with time)"),
+    "dj.novelty_plays_scale": (1.0, float, "Novelty plays scale",
+                               "Recent plays at which the novelty factor halves — X / (X + recent plays). "
+                               "Higher = gentler falloff; very large effectively disables the novelty term"),
+    "dj.uncertainty_bonus": (1.5, float, "Uncertainty bonus",
+                             "Cap on the exploration multiplier for under-evidenced tracks: weight x (1 + "
+                             "this / sqrt(1 + evidence)). Bounded, so it can never outrank proven quality"),
+    "dj.uncertainty_listener_weight": (0.1, float, "Listener evidence weight",
+                                       "How strongly a listen counts as evidence about a track, relative "
+                                       "to a vote (votes + this x listeners). A track aired to nobody "
+                                       "keeps its exploration bonus"),
     "dj.variation_rate": (0.15, float, "Variation rate", "Chance that a commissioned job is a variation of a popular track"),
     "dj.variation_score_threshold": (0.6, float, "Variation score threshold", "Wilson score a track needs before variations are commissioned"),
     "dj.protect_threshold": (3, int, "Auto-protect threshold", "Net upvotes at which a track becomes protected from eviction"),

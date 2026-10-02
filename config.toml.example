@@ -143,7 +143,17 @@ lyrics_share = 0.5             # runtime: fraction of fresh commissions that use
                                #          instrumental prompts (0/1 = one kind only)
 repeat_window_tracks = 25      # runtime: don't repeat within the last N aired tracks
 repeat_window_hours = 6.0      # runtime: ... or within N hours
+                               # (when nothing passes the windows they halve progressively,
+                               #  so a starving library still picks by score, not by fallback)
 new_track_share = 0.35         # runtime: fraction of picks reserved for never-played tracks
+novelty_window_hours = 48.0    # runtime: plays newer than this count against a track's
+                               #          novelty weight; older plays are forgotten
+novelty_plays_scale = 1.0      # runtime: recent plays at which novelty halves — X/(X+plays);
+                               #          higher = gentler falloff, huge = disabled
+uncertainty_bonus = 1.5        # runtime: cap on the exploration multiplier for tracks with
+                               #          little evidence (bounded, never outranks proven quality)
+uncertainty_listener_weight = 0.1  # runtime: a listen counts as weak evidence vs a vote;
+                                   #          votes + this x listeners (plays count for nothing)
 variation_rate = 0.15          # runtime: chance a commissioned job is a variation
 variation_score_threshold = 0.6  # runtime: Wilson score a track needs to earn variations
 protect_threshold = 3          # runtime: net upvotes that auto-protect a track

@@ -31,6 +31,7 @@ MODULES = [
     "test_encoder",         # HLS generations: epoch naming, flush playlist bridge
     "test_feeder",          # in-place skip: same-timeline cut, played_s clamp
     "test_library_page",    # library tab: column sorting, paging, URL state
+    "test_pick_next",       # DJ selection: novelty/uncertainty weights, relaxation
 ]
 
 
