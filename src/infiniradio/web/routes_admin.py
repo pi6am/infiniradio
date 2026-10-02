@@ -9,6 +9,7 @@ import math
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
@@ -292,18 +293,83 @@ async def listeners_page(request: Request, scale: str = "7d"):
 
 # ------------------------------------------------------------------ library
 
+LIBRARY_PAGE_SIZE = 100
+
+# Sortable library columns: key -> (header label, sort key, default
+# direction). 'votes' sorts by TOTAL votes (up + down) — the net is what
+# the score column already expresses. 'score' uses the same Wilson lower
+# bound the page displays, with NET votes breaking Wilson ties: every
+# all-downvote track sits at exactly 0.0, and (0, -10) should rank above
+# (0, -100). Remaining ties break to newest id first.
+_LIBRARY_SORTS = {
+    "id": ("id", lambda t: t["id"], "desc"),
+    "title": ("title", lambda t: (t["title"] or "").lower(), "asc"),
+    "style": ("style / theme", lambda t: (t["subtitle"] or "").lower(), "asc"),
+    "duration": ("dur", lambda t: t["duration_s"] or 0.0, "desc"),
+    "plays": ("plays", lambda t: t["play_count"] or 0, "desc"),
+    "listens": ("listens", lambda t: t["listens"] or 0, "desc"),
+    "votes": ("votes", lambda t: (t["vote_up"] or 0) + (t["vote_down"] or 0), "desc"),
+    "score": ("score",
+              lambda t: (wilson_score(t["vote_up"] or 0, t["vote_down"] or 0),
+                         (t["vote_up"] or 0) - (t["vote_down"] or 0)), "desc"),
+    "size": ("size", lambda t: t["size_bytes"] or 0, "desc"),
+    "aired": ("last aired", lambda t: t["last_played_at"] or "", "desc"),
+}
+
+
+def _lib_query(status: str, sort: str, direction: str, page: int) -> str:
+    return "/admin/library?" + urlencode(
+        {"status": status, "sort": sort, "dir": direction, "page": page})
+
+
+def _library_view(db, status: str, sort: str, dir: str, page: int) -> dict:
+    """All library-tab state: the page's enriched tracks, clickable sort
+    headers (clicking the active column flips direction; other columns
+    start at their default; both reset to page 1), and the pager."""
+    sort = sort if sort in _LIBRARY_SORTS else "id"
+    dir = dir if dir in ("asc", "desc") else "desc"
+    tracks = [_track_with_meta(db, r) for r in
+              db.query("SELECT * FROM tracks WHERE status = ?", (status,))]
+    # stable tiebreak first (newest id), then the requested order on top
+    tracks.sort(key=lambda t: t["id"], reverse=True)
+    tracks.sort(key=_LIBRARY_SORTS[sort][1], reverse=(dir == "desc"))
+
+    total = len(tracks)
+    max_page = max(1, (total + LIBRARY_PAGE_SIZE - 1) // LIBRARY_PAGE_SIZE)
+    page = max(1, min(page, max_page))
+
+    columns = []
+    for key, (label, _fn, dflt) in _LIBRARY_SORTS.items():
+        active = key == sort
+        target = ("asc" if dir == "desc" else "desc") if active else dflt
+        columns.append({"label": label,
+                        "url": _lib_query(status, key, target, 1),
+                        "arrow": ("▲" if dir == "asc" else "▼") if active else ""})
+
+    def nav(target: int) -> str | None:
+        if not (1 <= target <= max_page) or target == page:
+            return None
+        return _lib_query(status, sort, dir, target)
+
+    start = (page - 1) * LIBRARY_PAGE_SIZE
+    return {"tracks": tracks[start:start + LIBRARY_PAGE_SIZE],
+            "columns": columns, "sort": sort, "dir": dir,
+            "keep": urlencode({"sort": sort, "dir": dir}),
+            "pager": {"page": page, "max_page": max_page, "total": total,
+                      "first": nav(1), "prev": nav(page - 1),
+                      "next": nav(page + 1), "last": nav(max_page)}}
+
+
 @router.get("/library", response_class=HTMLResponse)
-async def library_page(request: Request, status: str = "ready"):
+async def library_page(request: Request, status: str = "ready",
+                       sort: str = "id", dir: str = "desc", page: int = 1):
     if not _is_admin(request):
         return _login_redirect()
     rt = request.app.state.rt
-    rows = rt.db.query(
-        "SELECT * FROM tracks WHERE status = ? ORDER BY id DESC LIMIT 500", (status,)
-    )
-    tracks = [_track_with_meta(rt.db, r) for r in rows]
     return request.app.state.templates.TemplateResponse(
         request, "admin/library.html",
-        _ctx(request, tracks=tracks, status=status))
+        _ctx(request, status=status,
+             **_library_view(rt.db, status, sort, dir, page)))
 
 
 @router.get("/aired", response_class=HTMLResponse)

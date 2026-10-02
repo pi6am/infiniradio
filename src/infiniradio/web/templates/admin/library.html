@@ -7,14 +7,18 @@
     <h2 style="margin:0">library</h2>
     <div>
       {% for s in ['ready', 'generating', 'trashed', 'failed', 'deleted'] %}
-      <a class="btn" href="/admin/library?status={{ s }}"
+      <a class="btn" href="/admin/library?status={{ s }}&{{ keep }}"
          style="{% if s == status %}border-color:var(--accent){% endif %}">{{ s }}</a>
       {% endfor %}
     </div>
   </div>
   <table>
-    <tr><th>id</th><th>title</th><th>style / theme</th><th>dur</th><th>plays</th>
-        <th>listens</th><th>votes</th><th>score</th><th>size</th><th>last aired</th><th></th></tr>
+    <tr>
+      {% for c in columns %}
+      <th><a href="{{ c.url }}">{{ c.label }}{% if c.arrow %} {{ c.arrow }}{% endif %}</a></th>
+      {% endfor %}
+      <th></th>
+    </tr>
     {% for t in tracks %}
     <tr>
       <td>{{ t.id }}</td>
@@ -44,5 +48,17 @@
     <tr><td colspan="11" class="muted">no tracks with status “{{ status }}”</td></tr>
     {% endfor %}
   </table>
+  <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:10px">
+    {% if pager.first %}<a class="btn" href="{{ pager.first }}">« first</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">« first</span>{% endif %}
+    {% if pager.prev %}<a class="btn" href="{{ pager.prev }}">‹ prev</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">‹ prev</span>{% endif %}
+    <span class="muted">page {{ pager.page }} / {{ pager.max_page }} · {{ pager.total }}
+      track{{ '' if pager.total == 1 else 's' }}</span>
+    {% if pager.next %}<a class="btn" href="{{ pager.next }}">next ›</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">next ›</span>{% endif %}
+    {% if pager.last %}<a class="btn" href="{{ pager.last }}">last »</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">last »</span>{% endif %}
+  </div>
 </div>
 {% endblock %}
