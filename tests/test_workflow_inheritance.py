@@ -89,7 +89,8 @@ def _load_from(cfg, wf_dir):
 
 def _real_family_checks(cfg) -> None:
     specs = load_workflows(cfg)
-    assert set(specs) == {"title-first", "jp-title-first", "zh-title-first", "en-native"}
+    assert set(specs) == {"title-first", "jp-title-first", "zh-title-first",
+                          "en-native", "songwriter"}
     assert specs["title-first"].abstract
     assert not specs["jp-title-first"].abstract and specs["jp-title-first"].styled
     jp = specs["jp-title-first"]

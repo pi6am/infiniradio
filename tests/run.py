@@ -22,6 +22,7 @@ _helpers.ensure_repo()
 
 MODULES = [
     "test_lyrics_engine",   # workflow engine: retries, resume, parsing, truncation
+    "test_songwriter",      # single-stage fine-tuned model: fresh retries, derived tags
     "test_jobs",            # two-phase job flow: lyrics -> render -> ingest
     "test_styles",          # styles: import, resolution, commissioning, share
     "test_workflow_inheritance",  # base chains, stage merge, abstract bases

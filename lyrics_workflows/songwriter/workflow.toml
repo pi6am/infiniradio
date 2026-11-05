@@ -1,0 +1,62 @@
+# Single-stage songwriter: a fine-tuned model (Suno-Song-Generator-gemma3-
+# 12B-HF.Q8_0, served on the station's [llm] endpoint) writes the whole
+# song — title, style prompt, lyrics — in one trained reply:
+#
+#     # <song title>
+#
+#     ```style
+#     <style prompt>
+#     ```
+#
+#     ```lyrics
+#     <lyrics>
+#     ```
+#
+# One call: no brainstorm, no refine, no tagging stage. Less controllable
+# than the title-first pipelines (the model picks its own style and
+# structure), far cheaper and simpler. The extracts ARE the gate — a
+# missing heading or fence is an extract failure, and the stage re-rolls:
+# fresh_retries re-sends the same prompt in a blank conversation, because
+# showing a fine-tuned model its own malformed reply only teaches it the
+# mistake.
+name = "songwriter"
+description = "random title → single fine-tuned songwriter model"
+seed_title = true
+tags = ["vocal", "english"]
+
+[output]
+title = "song_title"
+style = "style_prompt"
+lyrics = "final_lyrics"
+# No tagging stage: dynamic tags are matched out of the style prompt's
+# text (e.g. "synthwave textures" → synthwave), vocabulary-limited.
+tags_from = "style_prompt"
+max_tags = 3
+
+[[stage]]
+id = "write"
+template = "write.j2.md"
+thread = "new"
+max_attempts = 3
+fresh_retries = true
+model = "Suno-Song-Generator-gemma3-12B-HF.Q8_0"
+# Not a thinking model: the whole song fits comfortably in the global
+# default budget — set explicitly so the stage's budget is self-documenting.
+max_tokens = 8192
+
+[stage.extract]
+# The trained output shape, parsed locally; ordered alternatives absorb
+# drift without retries. First title pattern anchors at the very start of
+# the reply; the second accepts a heading after stray preamble text.
+song_title = [
+  '\A\s*#+[ \t]+([^\n]+)',
+  '(?m)^#+[ \t]+([^\n]+)',
+]
+style_prompt = [
+  '(?s)```style[^\n]*\n(.*?)\n```',
+  '(?is)```style[^\n]*\n(.*?)\n```',
+]
+final_lyrics = [
+  '(?s)```lyrics[^\n]*\n(.*?)\n```',
+  '(?is)```lyrics[^\n]*\n(.*?)\n```',
+]

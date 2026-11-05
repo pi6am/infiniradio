@@ -28,6 +28,9 @@ lyrics_workflows/
   zh-title-first/         # child + a [params] language override
   en-native/              # child: removes the laundering pair, adds one
                           #   write stage (its only template file)
+  songwriter/             # standalone single-stage: a fine-tuned model
+                          #   writes title + style + lyrics in one trained
+                          #   reply (# heading, ```style / ```lyrics fences)
 ```
 
 ## workflow.toml
@@ -48,6 +51,9 @@ title = "song_name"              # optional; falls back to the seed title
 style = "style_prompt"           # required
 lyrics = "final_lyrics"          # required
 tags = "track_tags"              # optional: comma-separated tag list
+                                 #   (mutually exclusive with tags_from)
+tags_from = "style_prompt"       # optional: derive tags by matching the
+                                 #   vocabulary against this variable's text
 
 [[stage]]
 id = "refine"                    # identifier (used in logs and the admin UI)
@@ -62,6 +68,10 @@ thread = "new"                   # "new" conversation | "continue" the previous
 max_attempts = 3                 # 1 attempt + N-1 retries with feedback
 feedback_template = "feedback.j2.md"  # optional; without it the same prompt
                                  # is re-sent (nondeterminism retry)
+fresh_retries = true             # optional: retries re-roll the same prompt
+                                 # in a BLANK conversation — the failed reply never enters
+                                 # the history (fine-tuned models; needs thread = "new"
+                                 # and no feedback_template)
 model = "other-model"            # optional per-stage [llm] overrides
 temperature = 0.8                #   (A/B test models within one workflow)
 max_tokens = 12288               # optional per-stage output budget: most
@@ -144,7 +154,12 @@ match wins) — e.g. a `Name:` line in backticks, quotes, or bare — so
 output-style variation parses locally instead of costing LLM round-trips.
 Retries continue the *same conversation*: the failed reply stays in the
 history and the rendered `feedback_template` follows as the next user turn.
-A stage that exhausts `max_attempts` fails the job; the DJ retries it
+`fresh_retries = true` stages are the exception: each retry re-rolls the
+stage prompt in a **blank conversation** — for a fine-tuned model with a
+fixed output format, where showing the failed reply only teaches it the
+mistake — and the winning exchange becomes the stage's whole thread
+(`songwriter/` works this way). A stage that exhausts `max_attempts` fails
+the job; the DJ retries it
 later, and a retried job **resumes from its last completed stage** (saved
 variables and conversation threads persist in the job row).
 
@@ -189,6 +204,12 @@ matched against the vocabulary — a thinking-leak reply full of prose
 yields a clean (or empty) pick — and truncated to `[output] max_tags`,
 most relevant first. Static workflow tags don't count against the limit
 and can't be picked away.
+
+A workflow can skip the tagging stage entirely: `output.tags_from =
+"style_prompt"` derives tags by matching the vocabulary against that
+variable's text (word boundaries, plurals tolerated — "synthwave
+textures" yields *synthwave*), again with no LLM round-trip. `songwriter/`
+works this way: its model already names the genres in the style prompt.
 
 ## Auditioning (no server)
 

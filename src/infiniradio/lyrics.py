@@ -76,10 +76,11 @@ _WORKFLOW_KEYS = {"name", "description", "enabled", "tags", "seed_title",
                   "params", "vars", "styled", "output", "stage",
                   "abstract", "base", "remove_stages"}
 _STAGE_KEYS = {"id", "template", "saves", "block", "extract", "thread",
-               "max_attempts", "feedback_template", "model", "temperature",
-               "max_tokens", "reasoning_effort", "extra", "gate", "after"}
+               "max_attempts", "feedback_template", "fresh_retries", "model",
+               "temperature", "max_tokens", "reasoning_effort", "extra",
+               "gate", "after"}
 _GATE_KEYS = {"max_chars", "min_chars", "all_of", "any_of", "forbidden"}
-_OUTPUT_KEYS = {"title", "style", "lyrics", "tags", "max_tags"}
+_OUTPUT_KEYS = {"title", "style", "lyrics", "tags", "tags_from", "max_tags"}
 
 
 class WorkflowError(RuntimeError):
@@ -127,6 +128,12 @@ class StageSpec:
     thread: str = "new"              # "new" | "continue" (previous stage's thread)
     max_attempts: int = 1
     feedback_template: str | None = None       # rendered with the failures
+    fresh_retries: bool = False                # retries re-roll the same prompt
+                                               # in a BLANK conversation: the
+                                               # failed reply never enters the
+                                               # history (fine-tuned models
+                                               # with a fixed output format;
+                                               # no feedback_template allowed)
     model: str | None = None         # per-stage [llm] overrides (A/B testing)
     temperature: float | None = None
     max_tokens: int | None = None    # per-stage output budget: most stages
@@ -148,6 +155,10 @@ class OutputSpec:
     lyrics: str
     title: str | None = None         # optional: falls back to the seed title
     tags: str | None = None          # optional: comma-separated tag list
+    tags_from: str | None = None     # optional alternative to tags: derive
+                                     # them by matching the vocabulary against
+                                     # this variable's text (e.g. the style
+                                     # prompt) — no tagging stage needed
     max_tags: int | None = None      # truncate the dynamic (LLM-picked) tags
                                      # to this many, most relevant first;
                                      # static tags don't count against it
@@ -323,6 +334,7 @@ def _parse_stage(data: dict, where: str) -> StageSpec:
         id=stage_id, template=template, saves=saves, block=block, extract=extract,
         thread=thread,
         max_attempts=max(1, int(data.get("max_attempts") or 1)),
+        fresh_retries=bool(data.get("fresh_retries", False)),
         feedback_template=(str(data["feedback_template"])
                            if data.get("feedback_template") else None),
         model=(str(data["model"]) if data.get("model") else None),
@@ -485,6 +497,16 @@ def _build_spec(directory: Path, data: dict, chain: list[Path]) -> WorkflowSpec:
         if s.id in seen:
             raise WorkflowError(f"{where}: duplicate stage id {s.id!r}")
         seen.add(s.id)
+        if s.fresh_retries:
+            if s.thread != "new":
+                raise WorkflowError(
+                    f"{where}: stage {s.id!r}: fresh_retries needs thread = 'new' "
+                    "(a continued thread is exactly the context a retry would drop)")
+            if s.feedback_template:
+                raise WorkflowError(
+                    f"{where}: stage {s.id!r}: fresh_retries re-rolls the stage "
+                    "prompt in a new conversation — there is no feedback turn "
+                    "to render; unset feedback_template")
     if stages[0].thread == "continue":
         raise WorkflowError(f"{where}: the first stage cannot thread = 'continue'")
 
@@ -500,15 +522,22 @@ def _build_spec(directory: Path, data: dict, chain: list[Path]) -> WorkflowSpec:
         if str(var) not in produced:
             raise WorkflowError(
                 f"{where}: output.{key} = {var!r} is not saved or extracted by any stage")
-    for key in ("title", "tags"):
+    for key in ("title", "tags", "tags_from"):
         var = output_data.get(key)
         if var and str(var) not in produced:
             raise WorkflowError(
                 f"{where}: output.{key} = {var!r} is not saved or extracted by any stage")
+    if output_data.get("tags") and output_data.get("tags_from"):
+        raise WorkflowError(
+            f"{where}: output.tags and output.tags_from are mutually exclusive "
+            "(picked from a reply's tag list vs matched out of another "
+            "variable's text)")
     output = OutputSpec(
         style=str(output_data["style"]), lyrics=str(output_data["lyrics"]),
         title=(str(output_data["title"]) if output_data.get("title") else None),
         tags=(str(output_data["tags"]) if output_data.get("tags") else None),
+        tags_from=(str(output_data["tags_from"]) if output_data.get("tags_from")
+                   else None),
         max_tags=(int(output_data["max_tags"]) if output_data.get("max_tags") is not None
                   else None))
     if output.max_tags is not None and output.max_tags < 1:
@@ -602,6 +631,24 @@ def parse_tag_list(text: str) -> list[str]:
         tag = tag.strip().strip("`\"'“”‘’").strip()
         if tag and tag not in out:
             out.append(tag)
+    return out
+
+
+def tags_in_text(vocabulary: list[str], text: str) -> list[str]:
+    """Vocabulary tags that occur in free text — for prose like a style
+    prompt, where parse_tag_list's comma/newline splits find almost nothing
+    ("A cheesy, upbeat electropop track…" is not a tag list). Word-boundary
+    match, case-insensitive, optional plural so "female vocals" matches
+    "female vocal"; "pop" inside "popular" never matches. Vocabulary order,
+    deduped, lowercase (the canonical tag form)."""
+    out: list[str] = []
+    lowered = text.lower()
+    for tag in vocabulary:
+        t = str(tag).strip().lower()
+        if not t or t in out:
+            continue
+        if re.search(rf"\b{re.escape(t)}s?\b", lowered):
+            out.append(t)
     return out
 
 
@@ -845,17 +892,28 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
             result.title = str(vars_.get(spec.output.title)) if spec.output.title else None
             result.style = str(vars_.get(spec.output.style, "") or "")
             result.lyrics = str(vars_.get(spec.output.lyrics, "") or "")
-            dynamic = parse_tag_list(str(vars_.get(spec.output.tags, "") or "")) \
-                if spec.output.tags else []
-            if tag_vocabulary is not None:
-                # Sanitize: keep only known tags. A thinking-leak reply
-                # mentions plenty of words — only vocabulary matches count,
-                # so 30k chars of deliberation still yields a clean (or
-                # empty) pick, with no LLM round-trip spent on it. An EMPTY
-                # vocabulary sanitizes to nothing (station misconfiguration:
-                # statics only), it must not mean "accept anything".
-                allowed = {t.lower() for t in tag_vocabulary}
-                dynamic = [t for t in dynamic if t in allowed]
+            if spec.output.tags:
+                dynamic = parse_tag_list(str(vars_.get(spec.output.tags, "") or ""))
+                if tag_vocabulary is not None:
+                    # Sanitize: keep only known tags. A thinking-leak reply
+                    # mentions plenty of words — only vocabulary matches
+                    # count, so 30k chars of deliberation still yields a
+                    # clean (or empty) pick, with no LLM round-trip spent on
+                    # it. An EMPTY vocabulary sanitizes to nothing (station
+                    # misconfiguration: statics only), it must not mean
+                    # "accept anything".
+                    allowed = {t.lower() for t in tag_vocabulary}
+                    dynamic = [t for t in dynamic if t in allowed]
+            elif spec.output.tags_from:
+                # Derived, not asked: vocabulary tags matched against a
+                # variable's text (the style prompt) — no tagging stage, no
+                # extra LLM round-trip. The vocabulary IS the candidate list,
+                # so an empty one (or none supplied) means no dynamic tags.
+                dynamic = tags_in_text(
+                    tag_vocabulary or [],
+                    str(vars_.get(spec.output.tags_from, "") or ""))
+            else:
+                dynamic = []
             if spec.output.max_tags is not None:
                 dynamic = dynamic[:spec.output.max_tags]
             tags = list(spec.static_tags)
@@ -906,7 +964,10 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
                 )
 
             msg = Message("user", prompt)
-            conv: list[Message] = thread + [msg]
+            # fresh_retries stages re-roll in a blank conversation: the
+            # failed reply never enters the history. (Validation pins them
+            # to thread = "new", so on attempt 1 both arms are identical.)
+            conv: list[Message] = [msg] if stage.fresh_retries else thread + [msg]
             parts: list[str] = []
             usage: dict[str, int] = {}
             model_name = ""
@@ -981,9 +1042,13 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
             # The exchange happened; failed attempts stay in the history the
             # feedback turn continues from — continuation turns included, so
             # later "continue"-thread stages see the conversation the model
-            # actually experienced.
-            thread.extend(conv[len(thread):])
-            thread.append(Message("assistant", parts[-1]))
+            # actually experienced. fresh_retries stages keep only the
+            # WINNING exchange: discarded attempts never enter the thread
+            # (it is still empty on failed attempts, so the winning extend
+            # writes the whole conversation).
+            if ok or not stage.fresh_retries:
+                thread.extend(conv[len(thread):])
+                thread.append(Message("assistant", parts[-1]))
 
             if ok:
                 if stage.block:

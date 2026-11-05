@@ -134,6 +134,47 @@ A small voice rides the wind.
 1. **Iambic Flow:** adjusted phrasing so emphasis follows the meter.
 2. **Sparsity:** removed redundant words for a tighter rhythm.
 The revision keeps the song's essence while sharpening its scan."""),
+    # The single-stage songwriter workflow: the reply is the fine-tuned
+    # model's trained shape (# heading + ```style/```lyrics fences). The
+    # needle must not collide with the en-native/foreign draft needles
+    # ("Write a song about" vs "write a song in English" / "Use this guide
+    # to write a song") — checked, it does not.
+    ("Write a song about", """\
+# Velveeta
+
+```style
+A cheesy, upbeat electropop track with 80s-influenced synthwave textures and playful production. Features bright, processed synth pads, drum machines, and retro digital effects. The verses maintain a light, bouncy feel with minimal instrumentation, building into choruses with layered vocals and added synth elements. Bridge section incorporates pitch-shifted vocals and wider stereo imaging for enhanced nostalgia. Production intentionally references 80s commercial jingles with its polished, artificial quality while maintaining modern pop structure and arrangement.
+```
+
+```lyrics
+[verse 1]
+If you want a taste of heaven
+A warm and gooey sensation
+There's only one cheese that I've found
+That's smooth, creamy, all around
+Oh, Velveeta
+
+[chorus]
+Melt it, melt it, watch it flow
+Golden river, soft and slow
+Nothing fancy, nothing cured
+Just the melt that I prefer
+Oh, Velveeta
+
+[verse 2]
+Blue box glowing in the pantry light
+Shelf-stable promise, forever bright
+While the artisans age their wheel
+I have got my copper-kettle seal
+
+[bridge]
+It's not cheese, they say
+But it melts that way
+
+[outro]
+Oh, Velveeta
+Oh, Velveeta
+```"""),
     ("tags", "rock, pop, male vocal"),
 ]
 
@@ -155,6 +196,8 @@ class MockLLMClient(LLMClient):
         self.truncate_first = {k.lower(): n for k, n in (truncate_first or {}).items()}
         self.calls = 0
         self.last_extra: dict = {}
+        self.convs: list[list[Message]] = []  # message list per chat() call —
+        # tests assert conversation shape (fresh vs continued retries)
         self._sticky: str | None = None  # last matched stage keyword
 
     def _keyword(self, messages: list[Message]) -> str | None:
@@ -174,6 +217,7 @@ class MockLLMClient(LLMClient):
                    extra: dict | None = None) -> Reply:
         self.calls += 1
         self.last_extra = dict(extra or {})  # recorded for tests/diagnostics
+        self.convs.append(list(messages))
         key = self._keyword(messages)
         if key is not None:
             self._sticky = key
