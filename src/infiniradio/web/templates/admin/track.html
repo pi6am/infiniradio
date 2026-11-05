@@ -25,7 +25,11 @@
   {% endif %}
 
   {% if t.status in ('ready', 'trashed') and t.playout_path %}
-  <audio controls src="/admin/track/{{ t.id }}/audio" style="width:100%"></audio>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <audio controls src="/admin/track/{{ t.id }}/audio" style="flex:1;min-width:260px"></audio>
+    <a href="/admin/track/{{ t.id }}/download"
+       title="FLAC master when still on disk, else the normalized playout copy">↓ download</a>
+  </div>
   {% endif %}
 
   <form method="post" action="/admin/track/{{ t.id }}/rename">

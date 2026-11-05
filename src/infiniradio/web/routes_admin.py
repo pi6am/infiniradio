@@ -469,6 +469,42 @@ async def track_audio(request: Request, track_id: int):
     return FileResponse(p, media_type="audio/mp4")
 
 
+def _download_name(title: str, suffix: str) -> str:
+    """A filesystem-safe download filename from a track title: strip path
+    separators, quotes and control characters (titles are LLM- or
+    admin-supplied), collapse whitespace, cap the length. Falls back to
+    'track' when nothing survives."""
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", title or "")
+    name = re.sub(r"\s+", " ", name).strip()[:100].strip()
+    return f"{name or 'track'}{suffix}"
+
+
+@router.get("/track/{track_id}/download")
+async def track_download(request: Request, track_id: int):
+    """The generated audio as a download attachment: the FLAC master when
+    still on disk, else the normalized playout transcode. Same admin gate
+    as the audio stream; the filename argument is what makes FileResponse
+    send an attachment disposition."""
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    row = rt.db.one("SELECT title, original_path, playout_path FROM tracks"
+                    " WHERE id = ?", (track_id,))
+    if not row:
+        return PlainTextResponse("no such track", status_code=404)
+    music = rt.cfg.path("library.data_dir") / "music"
+    for rel in (row["original_path"], row["playout_path"]):
+        if not rel:
+            continue
+        p: Path = music / rel
+        if p.is_file():
+            return FileResponse(
+                p,
+                media_type="audio/flac" if p.suffix == ".flac" else "audio/mp4",
+                filename=_download_name(row["title"], p.suffix))
+    return PlainTextResponse("no audio", status_code=404)
+
+
 @router.post("/track/{track_id}/protect")
 async def track_protect(request: Request, track_id: int, csrf: str = Form("")):
     if not _is_admin(request) or not _csrf_ok(request, csrf):
