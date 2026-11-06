@@ -210,7 +210,7 @@ Config path: `--config X` or `INFINIRADIO_CONFIG`.
 ## Notes
 
 - The YuE2 weights are **CC BY-NC 4.0**. If you use YuE2 to generate music, the
-  generated music is for non-commercial use only. infiniradio itself is MIT-licensed.
+  generated music is for non-commercial use only. infiniradio itself is AGPL 3.0-licensed.
 - Latency: standard HLS ≈ 15–30 s. A track's airtime is scheduled as
   write-time + `stream.latency_hint` (players trail the live edge by ~3
   segments), which is what keeps "on air now" aligned with what listeners
