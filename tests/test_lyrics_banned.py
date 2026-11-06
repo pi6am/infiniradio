@@ -143,6 +143,18 @@ async def _main(cfg) -> None:
         "completely unrelated words only",
     ])
     assert rows == [{"phrase": line, "songs": 2, "pct": 66.7, "total": 2}], rows
+    # only DISPLAYED phrases absorb: with a one-row table, the longer
+    # variant is cut and the visible row keeps its full count — the
+    # number the library search reports when you click it
+    rows = phrases.top_phrases([
+        "i was supposed to leave tonight",
+        "i was supposed to leave forever",
+        "i was supposed to dance instead",
+        "i was supposed to sing along",
+        "i was supposed to run away",
+    ], limit=1)
+    assert rows == [{"phrase": "i was supposed to", "songs": 5,
+                     "pct": 100.0, "total": 5}], rows
     print("2. top_phrases: exclusive counts, unbounded length")
 
     # 3. engine gate, songwriter shape (extracted lyrics, fresh re-rolls):
