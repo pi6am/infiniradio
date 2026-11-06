@@ -13,6 +13,11 @@ import re
 
 _HEADER_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
 
+# Shortest phrase the analysis surfaces. Slop is noticeable in longer
+# phrases; a higher floor keeps the table clear of generic connective
+# tissue and leaves room for them.
+MIN_WORDS = 4
+
 
 def normalize(text: str | None) -> str:
     """Lyrics reduced to a comparable word sequence: lowercased, section
@@ -42,7 +47,7 @@ def contains_phrase(text: str, phrase: str) -> bool:
     return f" {needle} " in f" {hay} "
 
 
-def top_phrases(songs: list[str], *, n_min: int = 3,
+def top_phrases(songs: list[str], *, n_min: int = MIN_WORDS,
                 min_docs: int = 2, limit: int = 60) -> list[dict]:
     """The most over-represented word phrases (3+ words, no length cap)
     across a lyric corpus.

@@ -155,6 +155,9 @@ async def _main(cfg) -> None:
     ], limit=1)
     assert rows == [{"phrase": "i was supposed to", "songs": 5,
                      "pct": 100.0, "total": 5}], rows
+    # the minimum word count is a knob (MIN_WORDS): 3-word repeats stay
+    # below it
+    assert phrases.top_phrases(["alpha beta gamma one", "alpha beta gamma two"]) == []
     print("2. top_phrases: exclusive counts, unbounded length")
 
     # 3. engine gate, songwriter shape (extracted lyrics, fresh re-rolls):

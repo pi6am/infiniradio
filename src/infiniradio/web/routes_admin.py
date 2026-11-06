@@ -444,6 +444,7 @@ def _lyrics_view(db) -> dict:
     banned = [str(p) for p in (db.get_setting("banned_lyric_phrases") or [])]
     return {"rows": phrases.top_phrases(vocal),
             "vocal_count": len(vocal),
+            "min_words": phrases.MIN_WORDS,
             "banned": banned,
             "banned_text": "\n".join(banned)}
 
