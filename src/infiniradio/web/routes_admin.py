@@ -437,7 +437,8 @@ def _lyrics_view(db) -> dict:
     """The /admin/lyrics page's data: over-represented phrases across the
     non-deleted vocal library, plus the active banned list."""
     rows = db.query("SELECT lyrics_snapshot FROM tracks"
-                    " WHERE status != 'deleted' AND lyrics_snapshot != ''")
+                    " WHERE status NOT IN ('deleted', 'trashed')"
+                    " AND lyrics_snapshot != ''")
     # Instrumental snapshots normalize to nothing and drop out of the
     # corpus (and out of vocal_count) on their own.
     vocal = [r["lyrics_snapshot"] for r in rows if phrases.normalize(r["lyrics_snapshot"])]

@@ -231,16 +231,20 @@ def run() -> None:
         asyncio.run(_main(cfg))
 
         # 7. /admin/lyrics view: vocal corpus counts, placeholder excluded,
-        #    banned list round-trips through the setting
+        #    trashed and deleted tracks contribute nothing (bulk-deleting
+        #    slop songs must immediately shrink their phrase counts)
         db = DB(tmp / "infiniradio.db")
         _add(db, "v1", lyrics_snapshot="[verse 1]\nI'm a functioning alcoholic\nhere")
         _add(db, "v2", lyrics_snapshot="[chorus]\nI'm a functioning alcoholic\ntagain")
         _add(db, "v3", lyrics_snapshot="[Intro]\n\n[Instrumental]\n\n[Outro]")
+        _add(db, "trashed", status="trashed",
+             lyrics_snapshot="[verse]\nI'm a functioning alcoholic\nin the bin")
         _add(db, "gone", status="deleted",
              lyrics_snapshot="[verse]\nI'm a functioning alcoholic\ndeleted")
         v = _lyrics_view(db)
-        assert v["vocal_count"] == 2          # placeholder + deleted excluded
+        assert v["vocal_count"] == 2          # placeholder + trash + deleted excluded
         assert v["rows"][0]["phrase"] == "i'm a functioning alcoholic"
+        assert v["rows"][0]["songs"] == 2
         assert v["banned"] == [] and v["banned_text"] == ""
         print("7. lyrics view: corpus counts, placeholder/deleted excluded")
 
