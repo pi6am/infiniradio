@@ -42,9 +42,10 @@ def contains_phrase(text: str, phrase: str) -> bool:
     return f" {needle} " in f" {hay} "
 
 
-def top_phrases(songs: list[str], *, n_min: int = 3, n_max: int = 8,
+def top_phrases(songs: list[str], *, n_min: int = 3,
                 min_docs: int = 2, limit: int = 60) -> list[dict]:
-    """The most over-represented word n-grams across a lyric corpus.
+    """The most over-represented word phrases (3+ words, no length cap)
+    across a lyric corpus.
 
     Ranked by document frequency — how many songs contain the phrase —
     with occurrence totals breaking ties. Counts are EXCLUSIVE: an
@@ -53,43 +54,55 @@ def top_phrases(songs: list[str], *, n_min: int = 3, n_max: int = 8,
     its row at 900 when 100 of them continue into "i was a functioning
     alcoholic" (listed at 100); a phrase whose every occurrence extends
     longer listed phrases has nothing left and drops out.
+
+    Repeated phrases are mined level-wise — every repeated k-gram is a
+    right-extension of its repeated (k-1)-word prefix, so candidates grow
+    upward from n_min until repetition dies. A memorized line therefore
+    surfaces once at its full shared length, not as sliding 8-word
+    windows.
     """
     docs = [w for w in (normalize(s).split() for s in songs) if w]
     if not docs:
         return []
-    # Pass 1: per-phrase doc sets and occurrence totals.
-    grams: dict[tuple[str, ...], list] = {}
-    for i, words in enumerate(docs):
-        for n in range(n_min, n_max + 1):
-            if len(words) < n:
-                break
-            for j in range(len(words) - n + 1):
-                entry = grams.setdefault(tuple(words[j:j + n]), [set(), 0])
-                entry[0].add(i)
-                entry[1] += 1
-    # Pass 2: occurrence positions, candidates only — a phrase below
-    # min_docs can never be listed, so it can never cover anything.
-    candidates = {p for p, (d, _t) in grams.items() if len(d) >= min_docs}
-    positions: dict[tuple[str, ...], list[tuple[int, int]]] = {p: [] for p in candidates}
-    for i, words in enumerate(docs):
-        for n in range(n_min, n_max + 1):
-            if len(words) < n:
-                break
-            for j in range(len(words) - n + 1):
-                key = tuple(words[j:j + n])
-                if key in positions:
-                    positions[key].append((i, j))
+
+    # Level n_min: one full counting scan, then a positions pass that
+    # keeps only repeated phrases (anything rarer can never be listed).
+    seen: dict[tuple[str, ...], set[int]] = {}
+    for si, words in enumerate(docs):
+        for j in range(len(words) - n_min + 1):
+            seen.setdefault(tuple(words[j:j + n_min]), set()).add(si)
+    repeated: dict[tuple[str, ...], list[tuple[int, int]]] = {}
+    for si, words in enumerate(docs):
+        for j in range(len(words) - n_min + 1):
+            key = tuple(words[j:j + n_min])
+            if len(seen[key]) >= min_docs:
+                repeated.setdefault(key, []).append((si, j))
+    del seen
+
+    # Upward: extend each repeated phrase's occurrences by one word. The
+    # same (k-gram, position) is produced exactly once (from its prefix),
+    # so positions never duplicate.
+    by_len: dict[int, dict[tuple[str, ...], list[tuple[int, int]]]] = {}
+    k = n_min
+    while repeated:
+        by_len[k] = repeated
+        k += 1
+        nxt: dict[tuple[str, ...], list[tuple[int, int]]] = {}
+        for phrase, occ in repeated.items():
+            for si, j in occ:
+                words = docs[si]
+                if j + k - 1 < len(words):
+                    nxt.setdefault(phrase + (words[j + k - 1],), []).append((si, j))
+        repeated = {p: occ for p, occ in nxt.items()
+                    if len({s for s, _ in occ}) >= min_docs}
+
     # Longest phrases settle first: each listed phrase's occurrences
     # cover every span they contain, and shorter phrases count only the
     # occurrences that remain uncovered.
-    by_len: dict[int, list[tuple[str, ...]]] = {}
-    for phrase in positions:
-        by_len.setdefault(len(phrase), []).append(phrase)
     covered: dict[int, set[tuple[int, int]]] = {}   # song -> {(start, len)}
     rows: list[dict] = []
-    for n in range(n_max, n_min - 1, -1):
-        for phrase in by_len.get(n, ()):
-            occ = positions[phrase]
+    for n in sorted(by_len, reverse=True):
+        for phrase, occ in by_len[n].items():
             excl = [(s, j) for s, j in occ
                     if (j, n) not in covered.get(s, ())]
             excl_docs = {s for s, _ in excl}

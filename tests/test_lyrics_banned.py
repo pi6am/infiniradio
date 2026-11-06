@@ -134,7 +134,16 @@ async def _main(cfg) -> None:
                      "pct": 60.0, "total": 3},
                     {"phrase": "i was a functioning alcoholic", "songs": 2,
                      "pct": 40.0, "total": 2}], rows
-    print("2. top_phrases: exclusive counts, fragments keep leftovers")
+    # no length cap: a memorized 14-word line surfaces ONCE at its full
+    # shared length, never as sliding 8-word windows
+    line = "i was supposed to be sent away but they forgot to come and get me"
+    rows = phrases.top_phrases([
+        f"[verse]\n{line}\nthen more words follow here",
+        f"[chorus]\n{line}\nother tail words entirely",
+        "completely unrelated words only",
+    ])
+    assert rows == [{"phrase": line, "songs": 2, "pct": 66.7, "total": 2}], rows
+    print("2. top_phrases: exclusive counts, unbounded length")
 
     # 3. engine gate, songwriter shape (extracted lyrics, fresh re-rolls):
     #    a banned phrase fails attempt 1 (and only that), the clean re-roll
