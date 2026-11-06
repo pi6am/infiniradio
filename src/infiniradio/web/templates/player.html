@@ -38,7 +38,7 @@
   <div class="foldout-head">
     <h2>lyrics</h2>
     <button id="np-lyrics-fold" class="foldout-btn" type="button"
-            aria-controls="np-lyrics" aria-expanded="true" title="hide lyrics">&#9662;</button>
+            aria-controls="np-lyrics" aria-expanded="false" title="show lyrics">&#9658;</button>
   </div>
   <div id="np-lyrics" class="lyrics"></div>
 </aside>
@@ -76,10 +76,13 @@
 
   // ---- lyrics foldout: tuck the lyrics away until wanted -------------------
   // Hidden entirely while an instrumental plays (no authored lyrics); for
-  // vocal tracks the listener can fold it down to a header-only tab. The
-  // preference survives reloads.
-  let folded = false;
-  try { folded = localStorage.getItem('ir-lyrics-folded') === '1'; } catch (e) {}
+  // vocal tracks the listener can fold it down to a header-only tab. New
+  // visitors start compacted; a stored preference survives reloads.
+  let folded = true;
+  try {
+    const saved = localStorage.getItem('ir-lyrics-folded');
+    if (saved !== null) folded = saved === '1';
+  } catch (e) {}
   function applyFold() {
     elLyrics.hidden = folded;
     elCols.classList.toggle('folded', folded);
