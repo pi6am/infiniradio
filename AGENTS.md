@@ -7,6 +7,13 @@
   the working tree. The only exception is an explicit user request to
   commit.
 
+## Admin UI copy
+
+- **No patronizing "help" text in the admin panel.** Anyone using it knows
+  how the station works. Label controls plainly; don't explain what a
+  button does beyond its label, and don't add tip paragraphs under forms
+  or tables.
+
 ## Testing
 
 - The user runs the station locally and tests changes there. Do **not**

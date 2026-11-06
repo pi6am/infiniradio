@@ -22,11 +22,9 @@
 
 <div class="card">
   <h2 style="margin-top:0">over-represented phrases</h2>
-  <p class="muted">Word phrases (2–8 words) ranked by how many of the {{ vocal_count }}
+  <p class="muted">Word phrases (3–8 words) ranked by how many of the {{ vocal_count }}
     vocal track{{ '' if vocal_count == 1 else 's' }} in the non-deleted library contain
-    them; instrumental placeholders are excluded. Fragments of a longer phrase collapse
-    into it. Common connective phrases naturally top the list — look for distinctive
-    longer lines, then click one to find the songs carrying it.</p>
+    them.</p>
   {% if rows %}
   <table>
     <tr><th>phrase</th><th>songs</th><th>% vocal</th><th>occurrences</th></tr>

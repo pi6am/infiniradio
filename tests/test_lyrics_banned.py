@@ -103,17 +103,38 @@ async def _main(cfg) -> None:
     assert not phrases.contains_phrase("anything", "")   # empty phrase never matches
     print("1. normalize + whole-word-phrase matching")
 
-    # 2. phrase analysis: doc-frequency ranking, fragments collapse into
-    #    the longest maximal phrase, pct over the vocal corpus
+    # 2. phrase analysis: EXCLUSIVE counting — an occurrence inside a
+    #    listed longer phrase belongs to the longer form
     rows = phrases.top_phrases([
         "[verse 1]\nI'm a functioning alcoholic\nliving in a dream",
         "[chorus]\nShe said I'm a functioning alcoholic\ntonight we drive",
         "nothing shared here at all",
     ])
-    assert rows and rows[0] == {"phrase": "i'm a functioning alcoholic",
-                                "songs": 2, "pct": 66.7, "total": 2}, rows
-    assert all(r["phrase"] != "functioning alcoholic" for r in rows)  # collapsed
-    print("2. top_phrases: maximal phrases, doc counts, pct")
+    assert rows == [{"phrase": "i'm a functioning alcoholic",
+                     "songs": 2, "pct": 66.7, "total": 2}], rows
+    # every "i was born" occurrence extends "i was born in": nothing left
+    # for the fragment, only the maximal form is listed
+    rows = phrases.top_phrases([
+        "i was born in a town",
+        "i was born in the middle of the city",
+        "i was dancing alone",
+    ])
+    assert rows == [{"phrase": "i was born in", "songs": 2,
+                     "pct": 66.7, "total": 2}], rows
+    # ...but a shorter phrase whose occurrences do NOT all extend keeps
+    # its row with the exclusive count (the 1000/100 case, scaled)
+    rows = phrases.top_phrases([
+        "i was a functioning mess indeed",
+        "i was a functioning wreck indeed",
+        "i was a functioning joke indeed",
+        "i was a functioning alcoholic tonight",
+        "i was a functioning alcoholic forever",
+    ])
+    assert rows == [{"phrase": "i was a functioning", "songs": 3,
+                     "pct": 60.0, "total": 3},
+                    {"phrase": "i was a functioning alcoholic", "songs": 2,
+                     "pct": 40.0, "total": 2}], rows
+    print("2. top_phrases: exclusive counts, fragments keep leftovers")
 
     # 3. engine gate, songwriter shape (extracted lyrics, fresh re-rolls):
     #    a banned phrase fails attempt 1 (and only that), the clean re-roll
