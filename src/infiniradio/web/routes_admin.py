@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
-from .. import dj, janitor, library
+from .. import dj, janitor, library, phrases
 from ..config import RUNTIME_SETTINGS, runtime_get
 from ..util import fmt_duration, human_bytes, iso, normalize_newlines, utcnow, wilson_score
 from ..web.auth import SESSION_COOKIE, LoginThrottle, Sessions, verify_password, stored_password_hash
@@ -317,19 +317,31 @@ _LIBRARY_SORTS = {
 }
 
 
-def _lib_query(status: str, sort: str, direction: str, page: int) -> str:
-    return "/admin/library?" + urlencode(
-        {"status": status, "sort": sort, "dir": direction, "page": page})
+def _lib_query(status: str, sort: str, direction: str, page: int,
+               q: str = "") -> str:
+    params: dict[str, object] = {"status": status, "sort": sort,
+                                 "dir": direction, "page": page}
+    if q:
+        params["q"] = q
+    return "/admin/library?" + urlencode(params)
 
 
-def _library_view(db, status: str, sort: str, dir: str, page: int) -> dict:
+def _library_view(db, status: str, sort: str, dir: str, page: int,
+                  q: str = "") -> dict:
     """All library-tab state: the page's enriched tracks, clickable sort
     headers (clicking the active column flips direction; other columns
-    start at their default; both reset to page 1), and the pager."""
+    start at their default; both reset to page 1), and the pager. ``q``
+    filters on lyrics content: normalized whole-word-phrase matching (the
+    same matcher the banned-phrase gate uses), so case, punctuation and
+    apostrophe variants all hit."""
     sort = sort if sort in _LIBRARY_SORTS else "id"
     dir = dir if dir in ("asc", "desc") else "desc"
-    tracks = [_track_with_meta(db, r) for r in
-              db.query("SELECT * FROM tracks WHERE status = ?", (status,))]
+    q = (q or "").strip()
+    rows = db.query("SELECT * FROM tracks WHERE status = ?", (status,))
+    if q:
+        rows = [r for r in rows
+                if phrases.contains_phrase(r["lyrics_snapshot"] or "", q)]
+    tracks = [_track_with_meta(db, r) for r in rows]
     # stable tiebreak first (newest id), then the requested order on top
     tracks.sort(key=lambda t: t["id"], reverse=True)
     tracks.sort(key=_LIBRARY_SORTS[sort][1], reverse=(dir == "desc"))
@@ -343,18 +355,21 @@ def _library_view(db, status: str, sort: str, dir: str, page: int) -> dict:
         active = key == sort
         target = ("asc" if dir == "desc" else "desc") if active else dflt
         columns.append({"label": label,
-                        "url": _lib_query(status, key, target, 1),
+                        "url": _lib_query(status, key, target, 1, q),
                         "arrow": ("▲" if dir == "asc" else "▼") if active else ""})
 
     def nav(target: int) -> str | None:
         if not (1 <= target <= max_page) or target == page:
             return None
-        return _lib_query(status, sort, dir, target)
+        return _lib_query(status, sort, dir, target, q)
 
+    keep = {"sort": sort, "dir": dir}
+    if q:
+        keep["q"] = q
     start = (page - 1) * LIBRARY_PAGE_SIZE
     return {"tracks": tracks[start:start + LIBRARY_PAGE_SIZE],
-            "columns": columns, "sort": sort, "dir": dir,
-            "keep": urlencode({"sort": sort, "dir": dir}),
+            "columns": columns, "sort": sort, "dir": dir, "q": q,
+            "keep": urlencode(keep),
             "pager": {"page": page, "max_page": max_page, "total": total,
                       "first": nav(1), "prev": nav(page - 1),
                       "next": nav(page + 1), "last": nav(max_page)}}
@@ -362,14 +377,105 @@ def _library_view(db, status: str, sort: str, dir: str, page: int) -> dict:
 
 @router.get("/library", response_class=HTMLResponse)
 async def library_page(request: Request, status: str = "ready",
-                       sort: str = "id", dir: str = "desc", page: int = 1):
+                       sort: str = "id", dir: str = "desc", page: int = 1,
+                       q: str = ""):
     if not _is_admin(request):
         return _login_redirect()
     rt = request.app.state.rt
     return request.app.state.templates.TemplateResponse(
         request, "admin/library.html",
         _ctx(request, status=status,
-             **_library_view(rt.db, status, sort, dir, page)))
+             **_library_view(rt.db, status, sort, dir, page, q)))
+
+
+@router.post("/library/bulk")
+async def library_bulk(request: Request):
+    """Apply one action to many tracks at once (phrase cleanup, holds,
+    protection). Delete reuses the single-track semantics: queue purge +
+    trash with the review buffer, so a mistaken sweep is undoable per-track
+    from the trashed tab."""
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    form = await request.form()
+    if not _csrf_ok(request, str(form.get("csrf", ""))):
+        return PlainTextResponse("forbidden", status_code=403)
+    action = str(form.get("action", ""))
+    ids: list[int] = []
+    for raw in form.getlist("track_ids"):
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            pass
+    if action not in ("delete", "hold", "unhold", "protect", "unprotect") \
+            or not ids:
+        return PlainTextResponse("bad request", status_code=400)
+    flags = {"hold": ("hold", 1), "unhold": ("hold", 0),
+             "protect": ("protected", 1), "unprotect": ("protected", 0)}
+    n = 0
+    for tid in ids:
+        if rt.db.one("SELECT id FROM tracks WHERE id = ? AND status != 'deleted'",
+                     (tid,)) is None:
+            continue
+        if action == "delete":
+            # Never queued again, regardless of what follows — same as the
+            # single-track delete button.
+            rt.db.execute("DELETE FROM play_queue WHERE track_id = ?", (tid,))
+            library.schedule_delete(rt.db, rt.cfg, tid)
+        else:
+            col, val = flags[action]
+            rt.db.execute(f"UPDATE tracks SET {col} = ? WHERE id = ?", (val, tid))
+        n += 1
+    log.info("library bulk %s: %d track(s)", action, n)
+    return RedirectResponse(_back(request, "/admin/library"), status_code=303)
+
+
+# ------------------------------------------------------------------ lyrics
+
+
+def _lyrics_view(db) -> dict:
+    """The /admin/lyrics page's data: over-represented phrases across the
+    non-deleted vocal library, plus the active banned list."""
+    rows = db.query("SELECT lyrics_snapshot FROM tracks"
+                    " WHERE status != 'deleted' AND lyrics_snapshot != ''")
+    # Instrumental snapshots normalize to nothing and drop out of the
+    # corpus (and out of vocal_count) on their own.
+    vocal = [r["lyrics_snapshot"] for r in rows if phrases.normalize(r["lyrics_snapshot"])]
+    banned = [str(p) for p in (db.get_setting("banned_lyric_phrases") or [])]
+    return {"rows": phrases.top_phrases(vocal),
+            "vocal_count": len(vocal),
+            "banned": banned,
+            "banned_text": "\n".join(banned)}
+
+
+@router.get("/lyrics", response_class=HTMLResponse)
+async def lyrics_page(request: Request):
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/lyrics.html", _ctx(request, **_lyrics_view(rt.db)))
+
+
+@router.post("/lyrics/banned")
+async def lyrics_banned_save(request: Request):
+    """Update the banned-phrase list. Live: the next commissioned lyrics
+    job reads it (no restart). One phrase per line; blank lines and
+    duplicates drop, matching is normalized whole-word-phrase."""
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    form = await request.form()
+    if not _csrf_ok(request, str(form.get("csrf", ""))):
+        return PlainTextResponse("forbidden", status_code=403)
+    cleaned: list[str] = []
+    for line in str(form.get("phrases", "")).splitlines():
+        p = line.strip()[:200]
+        if p and p not in cleaned:
+            cleaned.append(p)
+    rt.db.set_setting("banned_lyric_phrases", cleaned[:200])
+    log.info("banned lyric phrases saved: %d active", len(cleaned))
+    return RedirectResponse("/admin/lyrics", status_code=303)
 
 
 # ------------------------------------------------------------------ dj debug

@@ -30,6 +30,7 @@ MODULES = [
     "test_llm_status",      # bounded + cached LLM health ping
     "test_app",             # app factory: startup validation, routes
     "test_lyrics_public",   # player lyrics: header stripping, payload placement
+    "test_lyrics_banned",   # banned phrases: gate, analysis, search, bulk ops
     "test_encoder",         # HLS generations: epoch naming, flush playlist bridge
     "test_feeder",          # in-place skip: same-timeline cut, played_s clamp
     "test_library_page",    # library tab: column sorting, paging, URL state

@@ -50,6 +50,7 @@ import jinja2
 
 from .config import Config
 from .llm.base import LLMClient, LLMError, Message
+from .phrases import normalize as _normalize_lyrics
 
 log = logging.getLogger(__name__)
 
@@ -755,6 +756,35 @@ def _section_patterns(stage: StageSpec) -> tuple[str, ...]:
     return (_GENERIC_SECTION_RE,)
 
 
+def lyrics_stage_ids(spec: WorkflowSpec) -> frozenset[str]:
+    """Stages whose output is (or contains) the song's words: every stage
+    producing a song block, plus the stage that lands the output lyrics
+    variable (via block, extract, or saves). The banned-phrase gate applies
+    to exactly these — style/tag/brainstorm text is never lyric-matched."""
+    ids = {s.id for s in spec.stages if s.block}
+    want = spec.output.lyrics
+    for s in spec.stages:
+        if s.block == want or s.saves == want or \
+                any(key == want for key, _pats in s.extract):
+            ids.add(s.id)
+    return frozenset(ids)
+
+
+def _banned_failures(banned: list[tuple[str, str]], gate_text: str) -> list[Failure]:
+    """forbidden_present failures for every admin-banned phrase whose word
+    sequence appears in the lyrics text. Reusing the code means the
+    existing retry machinery (feedback retries / fresh re-rolls) drives
+    these exactly like a workflow's own forbidden patterns."""
+    out: list[Failure] = []
+    haystack = f" {_normalize_lyrics(gate_text)} "
+    for original, needle in banned:
+        if f" {needle} " in haystack:
+            out.append(Failure(
+                "forbidden_present", "banned",
+                f"banned phrase {original!r} appears in the lyrics"))
+    return out
+
+
 def _evaluate(stage: StageSpec, reply_text: str,
               gate_text: str) -> tuple[list[Failure], dict[str, str]]:
     """All gate checks + extrations, evaluated together; never saves.
@@ -843,6 +873,7 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
                        on_stage: Callable[[str, dict[str, Any]], None] | None = None,
                        max_continuations: int = 2,
                        stop_after: str | None = None,
+                       banned: list[str] | None = None,
                        ) -> WorkflowResult:
     """Execute a workflow spec against an LLM client.
 
@@ -864,6 +895,11 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
     truncated after the bound fails the attempt with code "truncated".
     ``stop_after`` ends the run successfully once that stage completes
     (audition/debugging aid).
+
+    ``banned`` is the admin-managed phrase list (see /admin/lyrics): any
+    phrase whose word sequence appears in a lyrics-bearing stage's output
+    fails that attempt with code "forbidden_present", so the usual retry
+    machinery demands fresh words; exhausted retries fail the run.
     """
     progress = progress or {}
     completed: list[str] = list(progress.get("completed") or [])
@@ -881,6 +917,13 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
 
     result = WorkflowResult(ok=False)
     usage_total: dict[str, int] = {}
+
+    # Banned-phrase gate: (original, normalized) pairs, compiled once per
+    # run and applied to every lyrics-bearing stage's text.
+    banned_pairs = [(p, n) for p, n in
+                    ((str(p), _normalize_lyrics(str(p))) for p in (banned or []))
+                    if n]
+    banned_stages = lyrics_stage_ids(spec) if banned_pairs else frozenset()
 
     def finish(ok: bool, error: str = "") -> WorkflowResult:
         result.ok = ok
@@ -1017,6 +1060,20 @@ async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,
                 if stage.block else ""
             failures, extracted = _evaluate(
                 stage, full_text, block_text if stage.block else full_text)
+            if banned_pairs and stage.id in banned_stages:
+                # The admin banned-phrase gate rides the same retry path as
+                # a workflow's own forbidden patterns. Block stages check
+                # the extracted song; extract stages check the extracted
+                # lyrics variable (extraction already failed otherwise).
+                if stage.block:
+                    gate_text = block_text
+                elif spec.output.lyrics in extracted:
+                    gate_text = extracted[spec.output.lyrics]
+                elif stage.saves == spec.output.lyrics:
+                    gate_text = full_text
+                else:
+                    gate_text = ""
+                failures.extend(_banned_failures(banned_pairs, gate_text))
             if ended_truncated:
                 # Still cut off after every continuation: never treat a
                 # partial (often a thinking-leak work-in-progress draft) as

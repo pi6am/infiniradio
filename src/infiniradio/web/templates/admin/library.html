@@ -3,7 +3,7 @@
 {% block title %}admin — library{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
     <h2 style="margin:0">library</h2>
     <div>
       {% for s in ['ready', 'generating', 'trashed', 'failed', 'deleted'] %}
@@ -11,9 +11,42 @@
          style="{% if s == status %}border-color:var(--accent){% endif %}">{{ s }}</a>
       {% endfor %}
     </div>
+    {# Lyrics-phrase search: normalized whole-word matching (the banned-gate
+       matcher), carried through tabs, sort links and the pager via q/keep. #}
+    <form method="get" action="/admin/library">
+      <input type="hidden" name="status" value="{{ status }}">
+      <input type="text" name="q" value="{{ q }}" placeholder="lyrics phrase…"
+             style="width:190px;display:inline-block">
+      <button type="submit">search</button>
+      {% if q %}<a class="btn" href="/admin/library?status={{ status }}">clear</a>{% endif %}
+    </form>
   </div>
+  {% if q %}
+  <p class="muted" style="margin:6px 0 0">{{ pager.total }} track{{ '' if pager.total == 1 else 's' }}
+    with lyrics matching “{{ q }}” (status {{ status }})</p>
+  {% endif %}
+
+  {# Bulk actions: row checkboxes carry form="bulk-form" (inputs outside the
+     form element — the table cannot nest inside it; per-row action forms
+     already live in the table cells). #}
+  <div style="display:flex;gap:8px;align-items:center;margin:12px 0 4px">
+    <form id="bulk-form" method="post" action="/admin/library/bulk" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <select name="action" style="width:auto;display:inline-block">
+        <option value="delete">delete (trash)</option>
+        <option value="hold">hold</option>
+        <option value="unhold">unhold</option>
+        <option value="protect">protect</option>
+        <option value="unprotect">unprotect</option>
+      </select>
+      <button type="submit">apply to selected</button>
+    </form>
+  </div>
+
   <table>
     <tr>
+      <th style="width:22px"><input type="checkbox" title="select all"
+        onclick="var c=this.checked;document.querySelectorAll('input.rowcheck').forEach(function(b){b.checked=c})"></th>
       {% for c in columns %}
       <th><a href="{{ c.url }}">{{ c.label }}{% if c.arrow %} {{ c.arrow }}{% endif %}</a></th>
       {% endfor %}
@@ -21,9 +54,11 @@
     </tr>
     {% for t in tracks %}
     <tr>
+      <td><input type="checkbox" class="rowcheck" name="track_ids" value="{{ t.id }}" form="bulk-form"></td>
       <td>{{ t.id }}</td>
       <td><a href="/admin/track/{{ t.id }}">{{ t.title or '—' }}</a>
         {% if t.is_variation %}<span class="pill">var</span>{% endif %}
+        {% if t.hold %}<span class="pill">held</span>{% endif %}
         {% if t.protected %}<span class="pill ok">protected</span>{% endif %}</td>
       <td class="muted">{{ t.subtitle }}</td>
       <td class="muted">{{ t.duration_fmt }}</td>
@@ -45,7 +80,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="11" class="muted">no tracks with status “{{ status }}”</td></tr>
+    <tr><td colspan="12" class="muted">no tracks with status “{{ status }}”{% if q %} and lyrics matching “{{ q }}”{% endif %}</td></tr>
     {% endfor %}
   </table>
   <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:10px">

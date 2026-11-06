@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block bodyclass %}wide{% endblock %}
+{% block title %}admin — lyrics{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">banned phrases</h2>
+  <p class="muted">One phrase per line. Matching is case/punctuation-insensitive on whole
+    word sequences and applies at generation time to every lyrics-bearing stage: a match
+    fails the attempt and the stage retries with fresh words; exhausted retries fail the
+    job. Read live by the next commissioned job — no restart. Existing tracks are never
+    blocked here — search the library and use the bulk actions instead.</p>
+  <form method="post" action="/admin/lyrics/banned">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <textarea name="phrases" style="min-height:110px"
+              placeholder="enter the phrases to ban&#10;one phrase per line">{{ banned_text }}</textarea>
+    <div style="margin-top:10px">
+      <button type="submit">save</button>
+      <span class="muted">{{ banned | length }} phrase{{ '' if banned | length == 1 else 's' }} active</span>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">over-represented phrases</h2>
+  <p class="muted">Word phrases (2–8 words) ranked by how many of the {{ vocal_count }}
+    vocal track{{ '' if vocal_count == 1 else 's' }} in the non-deleted library contain
+    them; instrumental placeholders are excluded. Fragments of a longer phrase collapse
+    into it. Common connective phrases naturally top the list — look for distinctive
+    longer lines, then click one to find the songs carrying it.</p>
+  {% if rows %}
+  <table>
+    <tr><th>phrase</th><th>songs</th><th>% vocal</th><th>occurrences</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><a href="/admin/library?status=ready&q={{ r.phrase | urlencode }}">{{ r.phrase }}</a></td>
+      <td>{{ r.songs }}</td>
+      <td class="muted">{{ r.pct }}%</td>
+      <td class="muted">{{ r.total }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No phrase repeats across two or more vocal tracks yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

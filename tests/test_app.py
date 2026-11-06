@@ -44,7 +44,8 @@ def run() -> None:
                      "/admin/track/{track_id}/undelete", "/admin/track/{track_id}/hold",
                      "/admin/track/{track_id}/vary", "/admin/track/{track_id}/download",
                      "/admin/tags", "/admin/tags/create", "/admin/tags/{tag_id}/rename", "/admin/tags/{tag_id}/delete",
-                     "/admin/tags/{tag_id}/pickable"):
+                     "/admin/tags/{tag_id}/pickable",
+                     "/admin/library/bulk", "/admin/lyrics", "/admin/lyrics/banned"):
             assert need in paths, f"missing route {need}"
         print(f"1. app with --mockaudio --mockllm created; {len(paths)} admin routes")
 

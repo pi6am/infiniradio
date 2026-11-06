@@ -661,6 +661,15 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
         db.execute("UPDATE generation_jobs SET progress = ? WHERE id = ?",
                    (json.dumps(with_job_state(snapshot), ensure_ascii=False), job["id"]))
 
+    # Admin-managed banned phrases (live setting, see /admin/lyrics): the
+    # engine fails any lyrics-bearing stage whose words contain one and
+    # retries with fresh words before giving up. Read per run, so a list
+    # edit applies to the next commissioned job without a restart.
+    banned = [str(p) for p in (db.get_setting("banned_lyric_phrases") or [])
+              if str(p).strip()]
+    if banned:
+        log.info("job %s: %d banned lyric phrase(s) active", job["id"], len(banned))
+
     if progress.get("completed"):
         log.info("job %s: lyrics via workflow %s (theme %r, resuming at stage %s)",
                  job["id"], spec.name, theme_title, progress["completed"][-1])
@@ -675,7 +684,8 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
             progress=progress, guard=guard,
             on_attempt=lambda tr: _log_stage_attempt(db, job["id"], tr),
             on_stage=on_stage,
-            max_continuations=int(rt.cfg.get("llm.max_continuations", 2)))
+            max_continuations=int(rt.cfg.get("llm.max_continuations", 2)),
+            banned=banned)
         if not result.ok:
             _fail_job(db, job["id"], result.error)
             return
