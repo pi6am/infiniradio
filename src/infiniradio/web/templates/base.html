@@ -86,6 +86,45 @@
   audio { width: 100%; }
   footer { text-align: center; color: var(--muted); font-size: 13px; padding: 20px; }
   .right { text-align: right; }
+  /* Player lyrics panel: below 1250px it stacks between the on-air and
+     recently-aired cards (the main wrapper flattens via display:contents
+     and order shuffles it into place); above that it becomes a right
+     sidebar the listener can fold down to a slim tab (#player-cols.folded).
+     The wrapper is the single left column on wide screens so a tall
+     sidebar can never stretch the gap between the two main cards. */
+  .foldout-head { display: flex; align-items: baseline; justify-content: space-between;
+                  gap: 10px; }
+  .foldout-head h2 { margin: 0; }
+  .foldout-btn { padding: 1px 10px; font-size: 13px; line-height: 1.4; }
+  .lyrics { white-space: pre-wrap; margin-top: 10px; }
+  .player-cols { display: flex; flex-direction: column; }
+  .player-main { display: contents; }
+  #np-lyrics-card { order: 1; }
+  #np-recent-card { order: 2; }
+  @media (min-width: 1250px) {
+    body.player main { max-width: none; }
+    /* Main column keeps the original card width in every state: 860px is
+       main's max-width WITH its 2x16px padding (border-box), so the cards
+       are 828px everywhere else — the track must match that, not 860.
+       Only the lyrics sidebar takes the extra width on wide screens. */
+    .player-cols {
+      display: grid; align-items: start; gap: 20px; justify-content: center;
+      grid-template-columns: minmax(0, 828px);
+      position: relative;
+    }
+    .player-main { display: block; }
+    .player-cols.has-lyrics {
+      grid-template-columns: minmax(0, 828px) minmax(400px, min(560px, 36vw));
+    }
+    .player-cols.has-lyrics #np-lyrics-card { position: sticky; top: 16px; }
+    /* Folded: the tab has almost no visual mass, so it must not shift the
+       main column off viewport-center. Take it out of flow, pinned just
+       right of the centered column (414px = half of 828, 20px = gap). */
+    .player-cols.has-lyrics.folded { grid-template-columns: minmax(0, 828px); }
+    .player-cols.has-lyrics.folded #np-lyrics-card {
+      position: absolute; top: 0; left: calc(50% + 414px + 20px);
+    }
+  }
 </style>
 {% if request.url.path.startswith('/admin') %}
 <script src="/static/htmx.min.js"></script>

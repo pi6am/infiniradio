@@ -72,6 +72,23 @@ def _prompt_names(db: DB) -> dict[int, str]:
     return {p["id"]: p["name"] for p in db.query("SELECT id, name FROM prompts")}
 
 
+_LYRICS_HDR = re.compile(r"^\s*\[[^\]]*\]\s*$")
+
+
+def lyrics_public(text: str | None) -> str | None:
+    """Lyrics for display: whole-line section headers ([verse 1], [Chorus],
+    [Instrumental], ...) dropped, blank runs collapsed. None when nothing
+    survives — instrumental snapshots are only the [Intro]/[Instrumental]/
+    [Outro] placeholder (ad-libbing lives in the audio, never the text), so
+    this doubles as the has-authored-lyrics test for the player.
+    """
+    if not text:
+        return None
+    kept = [ln.rstrip() for ln in text.splitlines() if not _LYRICS_HDR.match(ln)]
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    return cleaned or None
+
+
 def track_public(row: dict, prompts: dict[int, str], my: dict[int, int]) -> dict:
     # Subtitle: workflow tracks show the seed title that themed the lyrics
     # ("The Shape of a Dream · Gauzy and Stated"); everything else shows the
@@ -223,13 +240,18 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
         return d
 
     cur = _pick_current(mode, prog_at, rows)
+    current = entry(cur) if cur else None
+    if current is not None:
+        # Lyrics ride along on the current entry only — the player folds
+        # them out on each song change; the recent rows stay lean.
+        current["lyrics"] = lyrics_public(cur.get("lyrics_snapshot"))
     return {
         "server_time": iso(utcnow()),
         "server_time_ms": epoch_ms(),
         "sync": mode,
         "epoch": encoder.epoch if encoder is not None else None,
         "playback_paused": bool(db.get_setting("playback_paused")),
-        "current": entry(cur) if cur else None,
+        "current": current,
         "recent": [entry(r) for r in rows[:10]],
     }
 
@@ -373,7 +395,8 @@ async def api_track(request: Request, track_id: int):
         return JSONResponse({"error": "not found"}, status_code=404)
     listener = ensure_listener(request)
     return JSONResponse(track_public(row, _prompt_names(rt.db),
-                                     library.my_votes(rt.db, listener[0])))
+                                     library.my_votes(rt.db, listener[0]))
+                        | {"lyrics": lyrics_public(row["lyrics_snapshot"])})
 
 
 # ------------------------------------------------------------------ HLS files

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}infiniradio — listen{% endblock %}
+{% block bodyclass %}player{% endblock %}
 {% block head %}
 {# Link-unfurl preview card (Discord, Telegram, Slack, iMessage, X...).
    Discord caches unfurls per URL forever — after changing these, force a
@@ -14,6 +15,10 @@
 {% endblock %}
 {% block content %}
 
+<div class="player-cols" id="player-cols">
+
+<div class="player-main">
+
 <section class="card">
   <audio id="audio" controls autoplay playsinline></audio>
   <h2 style="margin:14px 0 4px">on air now</h2>
@@ -27,6 +32,19 @@
   <table><tbody id="np-recent-rows"></tbody></table>
 </div>
 
+</div>
+
+<aside class="card" id="np-lyrics-card" hidden>
+  <div class="foldout-head">
+    <h2>lyrics</h2>
+    <button id="np-lyrics-fold" class="foldout-btn" type="button"
+            aria-controls="np-lyrics" aria-expanded="true" title="hide lyrics">&#9662;</button>
+  </div>
+  <div id="np-lyrics" class="lyrics"></div>
+</aside>
+
+</div>
+
 <script src="/static/hls.min.js"></script>
 <script>
 (function () {
@@ -36,6 +54,10 @@
   const elVotes = document.getElementById('np-votes');
   const elRows = document.getElementById('np-recent-rows');
   const elRecentCard = document.getElementById('np-recent-card');
+  const elCols = document.getElementById('player-cols');
+  const elLyricsCard = document.getElementById('np-lyrics-card');
+  const elLyrics = document.getElementById('np-lyrics');
+  const elFold = document.getElementById('np-lyrics-fold');
   const RECENT_N = 10;
 
   // ---- state ---------------------------------------------------------------
@@ -51,6 +73,26 @@
     const v = anchor.pdt + (Date.now() - anchor.at);
     return Number.isFinite(v) ? Math.round(v) : null;
   }
+
+  // ---- lyrics foldout: tuck the lyrics away until wanted -------------------
+  // Hidden entirely while an instrumental plays (no authored lyrics); for
+  // vocal tracks the listener can fold it down to a header-only tab. The
+  // preference survives reloads.
+  let folded = false;
+  try { folded = localStorage.getItem('ir-lyrics-folded') === '1'; } catch (e) {}
+  function applyFold() {
+    elLyrics.hidden = folded;
+    elCols.classList.toggle('folded', folded);
+    elFold.setAttribute('aria-expanded', String(!folded));
+    elFold.textContent = folded ? '\u25b8' : '\u25be';
+    elFold.title = folded ? 'show lyrics' : 'hide lyrics';
+  }
+  elFold.addEventListener('click', function () {
+    folded = !folded;
+    try { localStorage.setItem('ir-lyrics-folded', folded ? '1' : '0'); } catch (e) {}
+    applyFold();
+  });
+  applyFold();
 
   // ---- rendering (all text via textContent; DOM built by hand) -------------
   function fmtDur(s) {
@@ -87,6 +129,10 @@
 
   function render() {
     const cur = sched && sched.current;
+    const lyr = cur && cur.lyrics;
+    elLyrics.textContent = lyr || '';
+    elLyricsCard.hidden = !lyr;
+    elCols.classList.toggle('has-lyrics', !!lyr);
     if (cur) {
       elTitle.textContent = cur.title;
       elTitle.className = '';
