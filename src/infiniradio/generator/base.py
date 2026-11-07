@@ -2,7 +2,7 @@
 
 A Generator turns a GenRequest into artifacts inside a per-track directory:
 the original audio file plus the ABC score text. Implementations talk to
-whatever music backend they wrap (ComfyUI, a local mock, ...).
+whatever music backend they wrap (ComfyUI, KoboldCpp, a local mock, ...).
 """
 
 from __future__ import annotations
@@ -46,6 +46,10 @@ class Generator(ABC):
     async def status(self) -> dict[str, Any]:
         """Backend health/info for the admin dashboard."""
         return {"backend": self.name, "ok": True}
+
+    async def close(self) -> None:
+        """Release backend-owned resources such as HTTP clients."""
+        return None
 
     async def cleanup_now(self) -> dict[str, Any] | None:
         """Best-effort remote cleanup (sidecar). Returns response dict or None."""

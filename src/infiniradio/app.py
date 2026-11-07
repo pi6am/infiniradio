@@ -18,6 +18,7 @@ from .config import Config, load_config
 from .db import DB
 from .generator.base import Generator
 from .generator.comfyui import ComfyUIGenerator
+from .generator.koboldcpp import KoboldCppGenerator
 from .generator.mock import MockGenerator
 from .llm import LLMClient, make_llm_client
 from .util import utcnow
@@ -48,7 +49,7 @@ class StartupError(RuntimeError):
 
 
 def resolve_backend(cfg: Config, mockaudio: bool) -> str:
-    """Effective generator backend: 'mock' | 'comfyui' | 'off'.
+    """Effective generator backend: 'mock' | 'comfyui' | 'koboldcpp' | 'off'.
 
     The mock generator is testing-only and reachable exclusively through the
     --mockaudio command line flag so that no listener can ever be served sine
@@ -68,16 +69,19 @@ def resolve_backend(cfg: Config, mockaudio: bool) -> str:
         )
     if configured in ("", "off"):
         return "off"
-    if configured == "comfyui":
-        return "comfyui"
+    if configured in {"comfyui", "koboldcpp"}:
+        return configured
     raise StartupError(
-        f"unknown [generator] backend {configured!r} (expected 'comfyui' or 'off')"
+        f"unknown [generator] backend {configured!r} "
+        "(expected 'comfyui', 'koboldcpp', or 'off')"
     )
 
 
 def make_generator(cfg: Config, backend: str) -> Generator | None:
     if backend == "comfyui":
         return ComfyUIGenerator(cfg)
+    if backend == "koboldcpp":
+        return KoboldCppGenerator(cfg)
     if backend == "mock":
         return MockGenerator(cfg)
     return None  # 'off'
@@ -126,8 +130,8 @@ def _check_playout_viable(cfg: Config, backend: str) -> None:
     if ready == 0:
         raise StartupError(
             "no generator backend configured and the library is empty — set "
-            '[generator] backend = "comfyui" (plus [comfyui] url) in config.toml, '
-            "or run with --mockaudio for testing"
+            '[generator] backend = "comfyui" or "koboldcpp" (and configure that '
+            "backend's URL) in config.toml, or run with --mockaudio for testing"
         )
     log.warning("no generator backend configured — airing the existing library "
                 "(%d ready track(s)); no new music will be generated", ready)
@@ -262,7 +266,7 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
                 except (asyncio.CancelledError, Exception):
                     pass
             await rt.feeder.stop()
-            if isinstance(generator, ComfyUIGenerator):
+            if generator is not None:
                 await generator.close()
             if llm_client is not None:
                 await llm_client.close()

@@ -34,7 +34,7 @@ DEFAULTS: dict[str, Any] = {
         "password_hash": "",
     },
     "generator": {
-        # comfyui | off  ("" = unspecified; the server refuses to start with
+        # comfyui | koboldcpp | off  ("" = unspecified; the server refuses to start with
         # no generator and an empty library). The mock generator is
         # testing-only and cannot be selected here — use --mockaudio.
         "backend": "",
@@ -61,6 +61,20 @@ DEFAULTS: dict[str, Any] = {
             # SaveText node — the planning pass keeps it and its upstream nodes.
             "abc_save": "43",
         },
+    },
+    "koboldcpp": {
+        "url": "http://127.0.0.1:5001",
+        "api_key": "",
+        # auto discovers the currently loaded family from /api/extra/version.
+        "music_family": "auto",
+        "audio_format": "wav",
+        "request_timeout": 1800.0,
+        "generate_codes": False,
+        "rewrite_caption": False,
+        "stereo": True,
+        # Additional fields supported by KoboldCpp's music API, e.g. duration,
+        # inference_steps, guidance_scale, or ACE-Step/YuE2 sampling controls.
+        "options": {},
     },
     # Two-pass fresh-song generation (see abc_audit.py): plan the ABC,
     # screen it, retry with a new seed on rejection, then render.

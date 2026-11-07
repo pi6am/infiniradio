@@ -24,6 +24,7 @@ MODULES = [
     "test_lyrics_engine",   # workflow engine: retries, resume, parsing, truncation
     "test_songwriter",      # single-stage fine-tuned model: fresh retries, derived tags
     "test_jobs",            # two-phase job flow: lyrics -> render -> ingest
+    "test_koboldcpp",       # KoboldCpp native music API: prepare, render, audit
     "test_styles",          # styles: import, resolution, commissioning, share
     "test_workflow_inheritance",  # base chains, stage merge, abstract bases
     "test_deletion",        # deletion buffer + hold

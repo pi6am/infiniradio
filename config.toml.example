@@ -23,7 +23,7 @@ username = "admin"
 password_hash = ""
 
 [generator]
-# comfyui | off
+# comfyui | koboldcpp | off
 # The mock generator (sine tones) is testing-only and can NOT be selected
 # here — run `python -m infiniradio --mockaudio` instead. If no backend is
 # configured and the library is empty, the server refuses to start.
@@ -59,6 +59,23 @@ plan = "33:31"            # boolean: generate a new ABC plan (true) or use suppl
 abc = "33:32"             # supplied ABC text (used when plan = false)
 abc_save = "43"           # SaveText node — the planning pass keeps it and its upstream nodes
 audio_save = "10"         # SaveAudioAdvanced node (format patched per audio_format)
+
+# ---- KoboldCpp native music API (use when generator.backend = "koboldcpp") ----
+[koboldcpp]
+url = "http://127.0.0.1:5001"  # root API URL, not the /v1 OpenAI-compatible URL
+api_key = ""                  # KoboldCpp --password, sent as Bearer auth
+music_family = "auto"         # auto | acestep | yue2 (auto reads /api/extra/version)
+audio_format = "wav"          # wav | mp3
+request_timeout = 1800.0
+generate_codes = false         # ACE-Step only; YuE2 planning always generates its semantic plan
+rewrite_caption = false
+stereo = true
+
+# Optional fields from KoboldCpp's /api/extra/music/prepare and /generate schemas.
+# For example, set duration = 90 to request a 90-second ACE-Step song.
+[koboldcpp.options]
+# duration = 90
+# inference_steps = 8
 
 # ---- LLM lyrics generation (optional) ----
 # With llm.enabled = false (the default) no client is ever constructed and

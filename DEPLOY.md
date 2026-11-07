@@ -11,8 +11,8 @@ they differ.
 ```
 listeners ──HTTP/HLS──> infiniradio app (Python + ffmpeg, this machine)
                           │
-                          └── commissions jobs ──> ComfyUI (GPU machine, stays
-                              and downloads audio          where it is)
+                          └── commissions jobs ──> ComfyUI or KoboldCpp
+                              and downloads audio          (GPU machine)
 ```
 
 A deployment needs:
@@ -22,7 +22,7 @@ A deployment needs:
 | OS | Any Linux; Python 3.11+ and ffmpeg are in every current distro |
 | CPU/RAM | Modest — the app schedules and transcodes audio, the GPU work is remote |
 | Disk | `data/` grows to the music quota (default 50 GiB) |
-| Network | One TCP port for HTTP (default 8000); reachability to your ComfyUI |
+| Network | One TCP port for HTTP (default 8000); reachability to the selected music backend |
 | State | One directory tree (code + venv + `data/`); nothing lives outside it |
 
 Everything the station knows — library, votes, prompts, telemetry, the admin
@@ -77,7 +77,7 @@ cp config.toml.example config.toml
 ${EDITOR:-nano} config.toml
 ```
 
-Minimum for a real deployment:
+Example configuration with ComfyUI:
 
 ```toml
 [server]
@@ -91,10 +91,28 @@ backend = "comfyui"
 url = "http://192.168.x.x:8188"   # your ComfyUI machine
 ```
 
-Check that ComfyUI answers from this machine:
+Alternatively, use KoboldCpp's native music API:
+
+```toml
+[generator]
+backend = "koboldcpp"
+
+[koboldcpp]
+url = "http://192.168.x.x:5001"   # KoboldCpp API root (not /v1)
+music_family = "auto"             # or explicitly "acestep" / "yue2"
+# api_key = "..."                  # KoboldCpp --password, if enabled
+```
+
+Load a supported music model in KoboldCpp. The station calls
+`/api/extra/version`, `/api/extra/music/prepare` and
+`/api/extra/music/generate`; the music planner and renderer must both be
+available for API-based generation. Check the selected backend from the
+infiniradio machine before starting the station, e.g.:
 
 ```bash
 curl -sS http://192.168.x.x:8188/system_stats | head -c 200; echo
+# or
+curl -sS http://192.168.x.x:5001/api/extra/version
 ```
 
 ### 1.5 Admin password
@@ -111,7 +129,7 @@ cd /opt/infiniradio && .venv/bin/python -m infiniradio
 
 You should see the feeder start, the live playlist appear under
 `data/hls/`, and the player at `http://<machine>:8000/`. A fresh library
-airs silence until the first ComfyUI jobs finish and get ingested. `Ctrl-C`
+airs silence until the first music-backend jobs finish and get ingested. `Ctrl-C`
 when convinced.
 
 > The server refuses to start (exit code 2) if no generator backend is
@@ -464,7 +482,7 @@ are resolved from there.
 | Symptom | Meaning |
 |---|---|
 | Refuses to start: *another infiniradio instance is already using data/* | One is truly running — the guard is a kernel lock, it cannot go stale after a crash. Check `systemctl status infiniradio` / `ps aux | grep infiniradio`. |
-| Refuses to start (exit 2), empty library | No generator backend configured — set `[generator] backend = "comfyui"` (or test with `--mockaudio`). |
+| Refuses to start (exit 2), empty library | No generator backend configured — set `[generator] backend = "comfyui"` or `"koboldcpp"` (or test with `--mockaudio`). |
 | Config seemingly ignored / data dir in the wrong place | The process isn't running with the repo root as working directory (§3) — or point `--config` / `INFINIRADIO_CONFIG` at the file explicitly. |
-| Stream silent, player fine | Check the admin dashboard: generation paused (disk quota?), playback paused, or ComfyUI unreachable (`curl $COMFYUI_URL/system_stats`). |
+| Stream silent, player fine | Check the admin dashboard: generation paused (disk quota?), playback paused, or the selected music backend is unreachable. |
 | Generation works but the GPU box's drive keeps filling | Sidecar down, unreachable, or token mismatch — check `journalctl -u infiniradio-sidecar` on the ComfyUI machine and `[comfyui] cleanup_url`/`cleanup_token` on the radio machine (§5). |

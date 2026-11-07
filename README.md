@@ -1,16 +1,17 @@
 # infiniradio
 
-An infinite radio station: Dynamically generated music from
-[ComfyUI](https://github.com/comfyanonymous/ComfyUI), scheduled by a DJ that
+An infinite radio station: dynamically generated music from
+[ComfyUI](https://github.com/comfyanonymous/ComfyUI) or
+[KoboldCpp](https://github.com/LostRuins/koboldcpp), scheduled by a DJ that
 learns from listener votes, and broadcast as a live HLS stream everyone hears together.
 
-Recommended music generation model: [YuE2](https://huggingface.co/m-a-p/YuE2-3B)
+Recommended ComfyUI music generation model: [YuE2](https://huggingface.co/m-a-p/YuE2-3B). KoboldCpp supports ACE-Step and YuE2.
 
 ```
 listeners ──HLS──> web app <──> DJ ──picks──> library ──PCM──> ffmpeg ──> HLS segments
                      │            │              ▲                (one shared live stream)
                      │            └─ commissions ▼
-                     │            generation jobs ──> ComfyUI (remote GPU box) ──> new tracks
+                     │            generation jobs ──> ComfyUI or KoboldCpp ──> new tracks
                      └── votes steer the DJ: popular songs are replayed (and varied),
                          disliked songs eventually make room for new ones
 ```
@@ -73,7 +74,7 @@ listeners ──HLS──> web app <──> DJ ──picks──> library ──
 python -m venv .venv
 source .venv/bin/activate             # Or .venv\Scripts\activate.bat on Windows
 python -m pip install -e .
-cp config.toml.example config.toml    # set [generator] backend + [comfyui] url
+cp config.toml.example config.toml    # choose [generator] backend and configure its URL
 python -m infiniradio passwd          # set the admin password
 python -m infiniradio                 # serve on http://127.0.0.1:8000
 ```
@@ -167,19 +168,55 @@ to keep the phases from overlapping.
 The server downloads each job's audio + ABC via the ComfyUI API (`/prompt`, `/history`,
 `/view`) into its own `data/music/<track_id>/` — no shared filesystem required.
 
+## KoboldCpp music generation
+
+KoboldCpp can generate tracks with its native music API. Load a supported
+ACE-Step or YuE2 music model in KoboldCpp, then select it in `config.toml`:
+
+```toml
+[generator]
+backend = "koboldcpp"
+
+[koboldcpp]
+url = "http://gpu-box:5001"  # KoboldCpp API root (not the /v1 URL)
+music_family = "auto"       # auto, acestep, or yue2
+audio_format = "wav"         # wav or mp3
+# api_key = "..."            # KoboldCpp --password, if enabled
+```
+
+The generator discovers the loaded music family through
+`/api/extra/version`, plans songs through `/api/extra/music/prepare`, then
+streams the audio from `/api/extra/music/generate`. KoboldCpp's MusicLLM
+planner must be available for API planning; the `MusicLLM`-only configuration
+can plan but cannot render audio. The station's optional `[llm]` lyrics
+workflows are separate from KoboldCpp's music planner.
+
+`music_family = "auto"` uses the family loaded by the server; set `"acestep"`
+or `"yue2"` to require a particular family. YuE2 plans preserve their ABC
+score and semantic prefix, and use the configured `[abc_audit]` gate for
+fresh full-score songs. ACE-Step does not produce an ABC score. Advanced
+KoboldCpp API fields can be passed in `[koboldcpp.options]`, for example
+`duration = 90` or `inference_steps = 8`; `generate_codes` controls ACE-Step
+code planning (YuE2 planning always requests its semantic plan).
+
+KoboldCpp's music API returns complete binary audio directly to infiniradio,
+so no shared filesystem or cleanup sidecar is needed. An optional KoboldCpp
+`api_key` is sent as a Bearer token.
+
 ### How variations work
 
-The workflow contains an "ABC planning" boolean and an "empty ABC" text node wired
-through a switch. For a variation we flip the switch and inject the parent's saved ABC:
-the ABC-generation pass is skipped and the score is re-rendered with the chosen style
-prompt and a new seed.
+ComfyUI's workflow contains an "ABC planning" boolean and an "empty ABC" text node
+wired through a switch. For a variation, infiniradio injects the parent's saved ABC
+and renders it with the chosen style prompt and a new seed. KoboldCpp does the same
+for YuE2 using its native music plan; ACE-Step does not emit ABC, so it regenerates
+from the saved caption and lyrics instead.
 
 ### The ABC sanity gate
 
-Fresh songs are generated in two passes. First a text-only planning
-pass produces an ABC score. While its length is outside configurable
-bounds we retry with a different seed. Otherwise we render audio
-using this ABC.
+Fresh YuE2 songs are planned before rendering. ComfyUI submits a text-only planning
+pass; KoboldCpp uses `/api/extra/music/prepare`. While the ABC score is outside the
+configured length bounds, it is re-planned with a different seed. Accepted scores
+are then used for the audio render.
 
 Use `python -m infiniradio.abc_audit --library --vs-votes` to check
 the configuration against generated songs. Thresholds live under

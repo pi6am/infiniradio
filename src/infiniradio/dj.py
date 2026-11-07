@@ -571,7 +571,7 @@ def _fail_job(db: DB, job_id: int, error: str) -> None:
 def _complete_job(db: DB, job_id: int, result) -> None:
     """Mark a running job done, recording the seed that actually rendered
     (result.info['seed'] — the requested seed unless the ABC audit retried
-    with a fresh one) and the ComfyUI prompt id for replay lookups."""
+    with a fresh one) and the backend prompt id when one is available."""
     # Conditional on 'running': if the job was cancelled from the admin
     # panel while we were generating, the cancellation wins.
     db.execute(
@@ -751,8 +751,8 @@ async def job_runner(rt) -> None:
 
     Claims only render-phase jobs: instrumental prompt jobs enqueue
     directly into this phase; lyrics jobs arrive here after the lyrics
-    runner flips their phase. ComfyUI renders one at a time, exactly as
-    before the lyrics feature.
+    runner flips their phase. The configured music backend renders one job
+    at a time, exactly as before the lyrics feature.
     """
     log.info("job runner started (backend: %s)", rt.generator.name if rt.generator else "off")
     while True:

@@ -59,7 +59,7 @@ def cmd_passwd(config: str | None) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(
         prog="infiniradio",
-        description="Infinite AI radio station (YuE2 via ComfyUI + HLS).",
+        description="Infinite AI radio station (ComfyUI/KoboldCpp music + HLS).",
     )
     ap.add_argument("-c", "--config", default=None, help="path to config.toml")
     ap.add_argument("-v", "--verbose", action="store_true")
