@@ -124,17 +124,25 @@
   {% endif %}
 
   {% if t.status == 'ready' %}
-  <form method="post" action="/admin/track/{{ t.id }}/art/regen"
-        style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <select name="workflow">
-      <option value="">weighted pick</option>
-      {% for w in art_workflows %}
-      <option value="{{ w.name }}" {% if art_current and w.name == art_current.row.workflow_id %}selected{% endif %}>{{ w.name }}</option>
-      {% endfor %}
-    </select>
-    <button type="submit">generate art</button>
-  </form>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center">
+    <form method="post" action="/admin/track/{{ t.id }}/art/regen"
+          style="display:flex;gap:8px;align-items:center">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <select name="workflow">
+        <option value="">weighted pick</option>
+        {% for w in art_workflows %}
+        <option value="{{ w.name }}" {% if art_current and w.name == art_current.row.workflow_id %}selected{% endif %}>{{ w.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">generate art</button>
+    </form>
+    {% if art_current %}
+    <form method="post" action="/admin/track/{{ t.id }}/art/reroll">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">re-roll (new seed)</button>
+    </form>
+    {% endif %}
+  </div>
   {% if not art_ready %}
   <p class="muted" style="margin:8px 0 0">{{ art_note }}</p>
   {% endif %}

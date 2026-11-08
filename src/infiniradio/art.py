@@ -18,6 +18,9 @@ Jobs are kind='art' rows in generation_jobs:
                      typical endpoint proxies the same GPU that makes
                      music, so neither queue may starve the other)
 
+The admin re-roll path (same prompt, new seed) skips the LLM entirely and
+enqueues straight at 'art_render' (see enqueue_art_reroll).
+
 Everything tunable at runtime lives in the settings table (art.new_tracks /
 art.backfill / art.backfill_max_queued, plus the art_workflow_weights
 override map and the art_workflows_disabled list — see the admin prompts
@@ -337,6 +340,41 @@ def maybe_enqueue_for_track(rt, track_id: int) -> None:
     if not runtime_get(rt.cfg, rt.db, "art.new_tracks"):
         return
     enqueue_art_job(rt, track_id)
+
+
+def enqueue_art_reroll(rt, track_id: int) -> int | None:
+    """Queue a re-roll of the track's CURRENT art pick: the stored image
+    prompt is re-rendered byte-for-byte with a fresh seed — the tool for a
+    prompt that is right but a render that glitched. No LLM pass happens,
+    so the job lands directly at phase 'art_render' with the prompt
+    already in progress.outputs (where run_art_render reads it). The new
+    image becomes another immutable track_art row and the track's pick,
+    like any generation. Idempotent while an art job is queued/running."""
+    db = rt.db
+    track = db.one("SELECT id, status, art_id FROM tracks WHERE id = ?", (track_id,))
+    if track is None or track["status"] != "ready" or track["art_id"] is None:
+        return None
+    current = library.current_art(db, track_id)
+    if current is None or not (current["prompt"] or "").strip():
+        return None
+    pending = db.one(
+        "SELECT id FROM generation_jobs WHERE kind = 'art' AND track_id = ?"
+        " AND status IN ('queued', 'running')", (track_id,))
+    if pending:
+        return pending["id"]
+    seed = random.getrandbits(31)
+    while seed == current["seed"]:
+        seed = random.getrandbits(31)
+    progress = json.dumps({"outputs": {"image_prompt": current["prompt"]}},
+                          ensure_ascii=False)
+    job_id = db.execute(
+        "INSERT INTO generation_jobs (kind, phase, track_id, workflow_id, seed,"
+        " progress, status, created_at)"
+        " VALUES ('art', 'art_render', ?, ?, ?, ?, 'queued', ?)",
+        (track_id, current["workflow_id"], seed, progress, iso(utcnow())))
+    log.info("queued art re-roll job %s for track %s (workflow %r, seed %s)",
+             job_id, track_id, current["workflow_id"], seed)
+    return job_id
 
 
 _BACKFILL_WHERE = (" FROM tracks t WHERE t.status = 'ready' AND t.art_id IS NULL"

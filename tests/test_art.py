@@ -454,6 +454,48 @@ async def _main(cfg, tmp) -> None:
     db.set_setting("generation_paused", False)
     print("gallery page: backfill status line shown, held reason when paused")
 
+    # ---- same-prompt re-roll: fresh seed, no LLM pass -------------------------
+    # (route first, then the functional path; `fresh` carries the current
+    #  pick — prompt "x"*80, seed 3 — and t2 has none)
+    routes_admin._is_admin = lambda r: True
+    routes_admin._csrf_ok = lambda r, c: True
+    try:
+        ok = await routes_admin.track_art_reroll(fake, fresh, csrf="")
+        assert ok.status_code == 303
+        rjr = db.one("SELECT * FROM generation_jobs ORDER BY id DESC LIMIT 1")
+        assert rjr["kind"] == "art" and rjr["phase"] == "art_render"
+        assert rjr["track_id"] == fresh and rjr["status"] == "queued"
+        assert json.loads(rjr["progress"])["outputs"]["image_prompt"] == "x" * 80
+        assert (await routes_admin.track_art_reroll(fake, t2, csrf="")).status_code == 400
+        db.execute("DELETE FROM generation_jobs WHERE id = ?", (rjr["id"],))
+    finally:
+        routes_admin._is_admin, routes_admin._csrf_ok = real_admin, real_csrf
+    print("reroll route: queues straight to art_render; no current art -> 400")
+
+    before = library.current_art(db, fresh)
+    assert before["prompt"] == "x" * 80 and before["seed"] == 3
+    rj = art.enqueue_art_reroll(rt, fresh)
+    assert rj is not None
+    rjob = db.one("SELECT * FROM generation_jobs WHERE id = ?", (rj,))
+    assert rjob["phase"] == "art_render" and rjob["workflow_id"] == "lyric-scene"
+    assert rjob["seed"] not in (None, 3)          # a FRESH seed, never the same
+    assert json.loads(rjob["progress"])["outputs"]["image_prompt"] == "x" * 80
+    assert art.enqueue_art_reroll(rt, fresh) == rj          # idempotent while queued
+    assert art.enqueue_art_reroll(rt, t2) is None           # nothing current
+    # the GPU claim gates art renders on the images endpoint only — a
+    # re-roll carries no LLM work, so no llm/workflow requirement may hold it
+    assert dj._claim_gpu_job(rt, "render")["id"] == rj
+    db.execute("UPDATE generation_jobs SET status = 'running' WHERE id = ?", (rj,))
+    await art.run_art_render(rt, rjob)
+    row = db.one("SELECT * FROM tracks WHERE id = ?", (fresh,))
+    assert row["art_id"] not in (None, before["id"])        # a NEW image, now current
+    after = db.one("SELECT * FROM track_art WHERE id = ?", (row["art_id"],))
+    assert after["prompt"] == "x" * 80 and after["seed"] == rjob["seed"]
+    assert after["job_id"] == rj and after["workflow_id"] == "lyric-scene"
+    assert (library.art_dir(cfg, fresh) / f"{row['art_id']}.png").is_file()
+    print(f"reroll: same prompt + fresh seed -> new image #{row['art_id']}, "
+          f"history and old files untouched")
+
 
 def run() -> None:
     cfg, tmp = isolated_config()

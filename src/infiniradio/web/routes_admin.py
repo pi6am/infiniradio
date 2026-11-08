@@ -672,6 +672,27 @@ async def track_art_regen(request: Request, track_id: int,
     return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
 
 
+@router.post("/track/{track_id}/art/reroll")
+async def track_art_reroll(request: Request, track_id: int, csrf: str = Form("")):
+    """Queue a same-prompt re-roll of the track's current art with a fresh
+    seed — no LLM pass, so the prompt is reused byte-for-byte. For the
+    good-prompt / glitched-render case. Waits for nothing but the images
+    backend being configured (the Generate-page rule)."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    if getattr(rt, "images", None) is None:
+        return PlainTextResponse("art is not configured (images backend)",
+                                 status_code=400)
+    job_id = art.enqueue_art_reroll(rt, track_id)
+    if job_id is None:
+        return PlainTextResponse("track has no current art with a prompt to re-roll",
+                                 status_code=400)
+    log.info("art re-roll for track %s queued from admin panel (job %s)",
+             track_id, job_id)
+    return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
+
+
 @router.post("/art/{art_id}/use")
 async def art_use(request: Request, art_id: int, csrf: str = Form("")):
     """Make one stored image the track's current pick."""

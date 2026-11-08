@@ -760,7 +760,10 @@ def _claim_gpu_job(rt, last_phase: str) -> dict | None:
             "SELECT * FROM generation_jobs WHERE status = 'queued' AND phase = 'render'"
             " ORDER BY id LIMIT 1")
     art_render = None
-    if art.pipeline_ready(rt):
+    # An 'art_render' job needs only the images endpoint: it arrives here
+    # either after its LLM phase (the full pipeline gated that already) or
+    # enqueued directly as a same-prompt re-roll (no LLM involved).
+    if getattr(rt, "images", None) is not None:
         art_render = rt.db.one(
             "SELECT * FROM generation_jobs WHERE status = 'queued'"
             " AND phase = 'art_render' ORDER BY id LIMIT 1")
