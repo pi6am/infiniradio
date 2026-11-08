@@ -142,6 +142,7 @@
       elTitle.style.fontSize = '1.25rem';
       elMeta.textContent = metaLine(cur);
       elVotes.replaceChildren(voteBox(cur));
+      pushMediaSession(cur);
     } else if (sched && sched.playback_paused) {
       elTitle.textContent = '\u23f8 station paused\u2026';
       elTitle.className = 'muted';
@@ -175,6 +176,50 @@
       tr.append(td1, td2, td3);
       return tr;
     }));
+  }
+
+  // ---- media session: now-playing on the OS side ----------------------------
+  // navigator.mediaSession is what an Android phone publishes as its media
+  // session — and that session is what travels to car heads over Bluetooth
+  // (AVRCP) — so track titles appear on the dash. Chrome maps this 1:1;
+  // iOS/Safari support is partial (lock screen yes, cars inconsistently).
+  let mediaTrackId = null;
+  function pushMediaSession(t) {
+    if (!('mediaSession' in navigator) || !t || t.id === mediaTrackId) return;
+    mediaTrackId = t.id;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: t.title,
+        artist: t.prompt,
+        album: 'infiniradio',
+        artwork: [
+          { src: '/static/android-chrome-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/static/android-chrome-512x512.png', sizes: '512x512', type: 'image/png' }
+        ]
+      });
+    } catch (e) { return; }
+    // Song-relative position for progress displays; the PDT timeline is
+    // only present in program-sync mode and needs a live anchor.
+    const now = playingPdt();
+    if (t.start_pdt_ms == null || now == null) return;
+    try {
+      const pos = (now - t.start_pdt_ms) / 1000;
+      const dur = (t.end_pdt_ms - t.start_pdt_ms) / 1000;
+      if (pos >= 0 && dur > pos)
+        navigator.mediaSession.setPositionState({ duration: dur,
+                                                  playbackRate: 1,
+                                                  position: pos });
+    } catch (e) { /* refused values are ignored, never fatal */ }
+  }
+  if ('mediaSession' in navigator) {
+    // Cars send AVRCP play/pause as media-session controls; without
+    // handlers the browser's element defaults apply, but be explicit so
+    // the buttons track the same element the user hears.
+    const on = function (action, fn) {
+      try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {}
+    };
+    on('play', function () { audioEl.play().catch(function () {}); });
+    on('pause', function () { audioEl.pause(); });
   }
 
   // ---- voting: optimistic local update, reconciled by the server -----------
