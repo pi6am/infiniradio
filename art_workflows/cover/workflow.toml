@@ -1,0 +1,34 @@
+name = "cover"
+description = "Album-cover base: a concept pass, then the final image prompt (children pick the medium)"
+abstract = true
+
+[vars]
+art_direction = "One strong focal idea, readable at thumbnail size, no text or lettering in the image."
+
+[[stage]]
+id = "concept"
+template = "concept.j2.md"
+saves = "concept"
+max_attempts = 2
+[stage.gate]
+max_chars = 700
+min_chars = 30
+
+[[stage]]
+id = "prompt"
+template = "prompt.j2.md"
+thread = "continue"
+max_attempts = 3
+feedback_template = "feedback.j2.md"
+[stage.gate]
+max_chars = 900
+min_chars = 60
+[stage.extract]
+image_prompt = [
+  '(?s)```text\n(.*?)\n```',
+  '(?s)```\n(.*?)\n```',
+  '(?s)image prompt:\s*(.+)',
+]
+
+[output]
+prompt = "image_prompt"

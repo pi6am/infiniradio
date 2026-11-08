@@ -77,6 +77,48 @@
 </div>
 {% endif %}
 
+{% if artworkflows %}
+<div class="card">
+  <h2 style="margin-top:0">art workflows</h2>
+  <p class="muted">File-defined image-prompt pipelines (art_workflows/&lt;name&gt;/workflow.toml),
+    one picked per art job by weight. Toggles and weights are live (settings table); the
+    master switch and auto/backfill settings are on <a href="/admin/settings">the settings page</a>.</p>
+  <table>
+    <tr><th>workflow</th><th>enabled</th><th>stages</th><th>weight</th><th>tracks</th><th></th></tr>
+    {% for w in artworkflows %}
+    <tr>
+      <td title="{{ w.description }}">{{ w.name }}</td>
+      <td>{% if w.abstract %}<span class="pill">base</span>
+        {% elif w.enabled %}<span class="pill ok">on</span>
+        {% elif not w.file_enabled %}<span class="pill">off · file</span>
+        {% else %}<span class="pill">off</span>{% endif %}</td>
+      <td class="muted">{{ w.stages }}</td>
+      <td>
+        {% if not w.abstract %}
+        <form class="inline" method="post" action="/admin/art-workflows/{{ w.name }}/weight">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="text" name="weight" value="{{ w.weight }}" size="4"
+                 style="width:4em" title="file default: {{ w.file_weight }}">
+          <button type="submit">set</button>
+        </form>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td class="muted">{{ w.tracks }}</td>
+      <td>
+        {% if w.abstract %}<span class="muted" title="inheritance base — never picked">base</span>
+        {% elif w.file_enabled %}
+        <form class="inline" method="post" action="/admin/art-workflows/{{ w.name }}/toggle">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">{{ 'disable' if w.enabled else 'enable' }}</button>
+        </form>
+        {% else %}<span class="muted" title="enabled = false in workflow.toml — edit the file to change">file-disabled</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
 <p class="muted">per-tag stats and tag management live on
   <a href="/admin/tags">the tags page →</a></p>
 {% endblock %}

@@ -1,0 +1,7 @@
+name = "cover-photographic"
+description = "Album covers with a cinematic photographic look"
+base = "cover"
+weight = 1.0
+
+[params]
+medium = "cinematic photography, 35mm, natural light, gentle film grain"

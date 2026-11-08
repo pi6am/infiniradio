@@ -20,7 +20,7 @@ from .generator.base import Generator
 from .generator.comfyui import ComfyUIGenerator
 from .generator.koboldcpp import KoboldCppGenerator
 from .generator.mock import MockGenerator
-from .llm import LLMClient, make_llm_client
+from .llm import LLMClient, make_images_client, make_llm_client
 from .util import utcnow
 from .web import auth
 from .web.routes_admin import router as admin_router
@@ -38,6 +38,8 @@ class Runtime:
     generator: Generator | None
     llm: LLMClient | None = None
     workflows: dict = field(default_factory=dict)
+    images: object | None = None       # track-art backend (llm.images)
+    artworkflows: dict = field(default_factory=dict)
     gen_lock: object | None = None    # asyncio.Lock when lyrics.serialize_with_render
     feeder: object | None = None
     telemetry: object | None = None
@@ -193,7 +195,7 @@ async def _plain_response(send, status: int, body: bytes) -> None:
 
 
 def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
-               mockllm: bool = False) -> FastAPI:
+               mockllm: bool = False, mockart: bool = False) -> FastAPI:
     cfg = load_config(config_path)
 
     # Validate before uvicorn starts so misconfiguration ends in a single
@@ -210,6 +212,18 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
             # startup with its message via the handler below.
             from .lyrics import load_workflows
             workflows = load_workflows(cfg)
+        artworkflows = {}
+        images_on = mockart or (bool(str(cfg.get("art.api.base_url", "") or "").strip())
+                                and bool(str(cfg.get("art.api.model", "") or "").strip()))
+        if images_on and llm_backend == "off":
+            # Art needs the LLM to write image prompts; the endpoint alone
+            # is not enough. Warn (not fatal): music runs fine without art.
+            log.warning("[art.api] configured but [llm] is disabled — track art "
+                        "stays off (image-prompt writing needs the LLM)")
+            images_on = False
+        if images_on:
+            from .art import load_art_workflows
+            artworkflows = load_art_workflows(cfg)
         from .util import lock_data_dir
         lock_data_dir(cfg.path("library.data_dir"))
     except (StartupError, RuntimeError) as exc:
@@ -232,12 +246,14 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
 
         generator = make_generator(cfg, backend)
         llm_client = make_llm_client(cfg, mockllm=mockllm) if llm_backend != "off" else None
+        images_client = make_images_client(cfg, mockart=mockart) if images_on else None
         app.state.sessions = auth.Sessions(auth.get_server_secret(db, cfg))
 
         from .streamer.feeder import Feeder  # deferred import (avoids cycles)
         from . import telemetry as telemetry_mod
         rt = Runtime(cfg=cfg, db=db, generator=generator, llm=llm_client,
-                     workflows=workflows,
+                     workflows=workflows, images=images_client,
+                     artworkflows=artworkflows,
                      gen_lock=asyncio.Lock()
                      if bool(cfg.get("lyrics.serialize_with_render", False)) else None)
         rt.feeder = Feeder(rt)
@@ -247,14 +263,20 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
         tasks = [asyncio.create_task(dj.janitor_loop(rt)),
                  asyncio.create_task(rt.feeder.run()),
                  asyncio.create_task(telemetry_mod.telemetry_loop(rt))]
-        if generator is not None:
+        if generator is not None or images_client is not None:
+            # The GPU-side runner serves both music renders and art renders
+            # (alternating); an art-only (playout) station still runs it.
             tasks.append(asyncio.create_task(dj.job_runner(rt)))
+        if generator is not None:
             tasks.append(asyncio.create_task(dj.commission_loop(rt)))
         if llm_client is not None:
             tasks.append(asyncio.create_task(dj.lyrics_runner(rt)))
 
-        log.info("infiniradio on air: backend=%s llm=%s workflows=%d data=%s",
-                 backend, llm_backend, len(workflows), data_dir)
+        log.info("infiniradio on air: backend=%s llm=%s workflows=%d art=%s(%d "
+                 "workflow(s)) data=%s",
+                 backend, llm_backend, len(workflows),
+                 "on" if images_client is not None else "off",
+                 len(artworkflows), data_dir)
         try:
             yield
         finally:
@@ -270,6 +292,8 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
                 await generator.close()
             if llm_client is not None:
                 await llm_client.close()
+            if images_client is not None:
+                await images_client.close()
             db.conn.close()
 
     app = FastAPI(title="infiniradio", lifespan=lifespan,

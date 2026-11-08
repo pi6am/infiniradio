@@ -38,6 +38,7 @@ Audition (repo root, no server involved):
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -51,6 +52,7 @@ import jinja2
 from .config import Config
 from .llm.base import LLMClient, LLMError, Message
 from .phrases import normalize as _normalize_lyrics
+from .util import iso, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -153,7 +155,10 @@ class StageSpec:
 @dataclass(frozen=True)
 class OutputSpec:
     style: str                       # required variable names
-    lyrics: str
+    lyrics: str | None = None        # required for lyrics workflows; None in
+                                     # the generic reuse (art workflows map
+                                     # their prompt onto `style` and read the
+                                     # raw vars themselves)
     title: str | None = None         # optional: falls back to the seed title
     tags: str | None = None          # optional: comma-separated tag list
     tags_from: str | None = None     # optional alternative to tags: derive
@@ -431,7 +436,10 @@ def _merge_raw(base: dict, child: dict) -> dict:
     name/enabled/abstract are the child's own (never inherited); base and
     remove_stages are consumed by the merge."""
     merged = dict(base)
-    for key in ("description", "seed_title", "styled"):
+    # "weight" is an art-workflow scalar; lyrics workflows reject the key
+    # at load, so listing it here is inert for them — and lets an art
+    # child override its base's weight.
+    for key in ("description", "seed_title", "styled", "weight"):
         if key in child:
             merged[key] = child[key]
     merged["name"] = child.get("name")
@@ -439,7 +447,7 @@ def _merge_raw(base: dict, child: dict) -> dict:
     merged["abstract"] = bool(child.get("abstract", False))
     if "tags" in child:
         merged["tags"] = child["tags"]
-    for key in ("params", "vars", "output"):
+    for key in ("params", "vars", "output", "requires"):
         if isinstance(child.get(key), dict):
             table = dict(merged.get(key) or {})
             table.update(child[key])
@@ -763,6 +771,8 @@ def lyrics_stage_ids(spec: WorkflowSpec) -> frozenset[str]:
     to exactly these — style/tag/brainstorm text is never lyric-matched."""
     ids = {s.id for s in spec.stages if s.block}
     want = spec.output.lyrics
+    if want is None:              # generic reuse (art): no lyrics contract
+        return ids
     for s in spec.stages:
         if s.block == want or s.saves == want or \
                 any(key == want for key, _pats in s.extract):
@@ -862,6 +872,29 @@ def _usage_add(total: dict[str, int], usage: dict[str, int]) -> None:
             total[k] = total.get(k, 0) + int(v)
         except (TypeError, ValueError):
             pass
+
+
+def log_attempt(db, job_id: int, trace: AttemptTrace) -> None:
+    """Persist one LLM exchange in job_stage_log (append-only diagnostics).
+    Shared by the lyrics and art runners: the trace type is the engine's,
+    so the persistence belongs beside it. Continuation rounds (truncation
+    recovery) and the final call's raw finish_reason are folded into
+    usage_json."""
+    usage = dict(trace.usage)
+    if trace.continuations:
+        usage["continuations"] = trace.continuations
+    if trace.finish_reason:
+        usage["finish_reason"] = trace.finish_reason
+    db.execute(
+        "INSERT INTO job_stage_log (job_id, stage_id, attempt, prompt_text, response_text,"
+        " vars_json, gate_json, model, usage_json, duration_s, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (job_id, trace.stage_id, trace.attempt, trace.prompt_text, trace.response_text,
+         json.dumps(trace.vars_snapshot, ensure_ascii=False),
+         json.dumps([{"code": f.code, "check": f.check, "detail": f.detail}
+                     for f in trace.failures]),
+         trace.model, json.dumps(usage), round(trace.duration_s, 3), iso(utcnow())),
+    )
 
 
 async def run_workflow(client: LLMClient, spec: WorkflowSpec, *,

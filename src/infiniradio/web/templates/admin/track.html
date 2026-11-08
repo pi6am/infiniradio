@@ -84,6 +84,52 @@
   </div>
 </div>
 
+<div class="card">
+  <h2 style="margin-top:0">track art</h2>
+  {% if art %}
+  <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+    <img src="{{ art.master }}" alt="track art"
+         style="width:220px;aspect-ratio:1;object-fit:cover;border-radius:8px">
+    <div style="flex:1;min-width:240px">
+      <table>
+        <tr><th>generated</th><td>{{ t.art_generated_at or '—' }}</td></tr>
+        <tr><th>workflow</th><td>{{ t.art_workflow_id or '—' }} · seed {{ t.art_seed or '—' }}
+          · v{{ t.art_version }}</td></tr>
+        {% if art_job %}<tr><th>last job</th><td><a href="/admin/jobs/{{ art_job.id }}">#{{ art_job.id }}</a>
+          {{ art_job.status }}</td></tr>{% endif %}
+      </table>
+      <p class="muted" style="margin:10px 0 0;font-size:.9em">{{ t.art_prompt }}</p>
+    </div>
+  </div>
+  {% elif art_job %}
+  <p class="muted" style="margin:0">no art yet — <a href="/admin/jobs/{{ art_job.id }}">job #{{ art_job.id }}</a>
+    {{ art_job.status }}</p>
+  {% else %}
+  <p class="muted" style="margin:0">no art yet</p>
+  {% endif %}
+
+  {% if t.status == 'ready' %}
+  <form method="post" action="/admin/track/{{ t.id }}/art/regen"
+        style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <select name="workflow">
+      <option value="">weighted pick</option>
+      {% for w in art_workflows %}
+      <option value="{{ w.name }}" {% if w.name == t.art_workflow_id %}selected{% endif %}>{{ w.name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">regenerate art</button>
+    {% if art %}
+    <button type="submit" formaction="/admin/track/{{ t.id }}/art/remove"
+            style="border-color:var(--bad)">remove</button>
+    {% endif %}
+  </form>
+  {% if not art_ready %}
+  <p class="muted" style="margin:8px 0 0">art backend not configured — set [art.api] in config.toml</p>
+  {% endif %}
+  {% endif %}
+</div>
+
 {% if t.abc_text %}
 <div class="card">
   <h2 style="margin-top:0">ABC score <span class="muted">(kept even if audio is deleted)</span></h2>

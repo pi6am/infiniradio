@@ -51,7 +51,7 @@ from dataclasses import replace as _dc_replace
 from datetime import timedelta
 from typing import Any
 
-from . import janitor, library, lyrics, naming
+from . import art, janitor, library, lyrics, naming
 from .config import Config, runtime_get
 from .db import DB
 from .generator.base import GenRequest, Generator
@@ -582,24 +582,9 @@ def _complete_job(db: DB, job_id: int, result) -> None:
 
 
 def _log_stage_attempt(db: DB, job_id: int, trace: AttemptTrace) -> None:
-    """Persist one LLM exchange in job_stage_log (append-only diagnostics).
-    Continuation rounds (truncation recovery) and the final call's raw
-    finish_reason are folded into usage_json."""
-    usage = dict(trace.usage)
-    if trace.continuations:
-        usage["continuations"] = trace.continuations
-    if trace.finish_reason:
-        usage["finish_reason"] = trace.finish_reason
-    db.execute(
-        "INSERT INTO job_stage_log (job_id, stage_id, attempt, prompt_text, response_text,"
-        " vars_json, gate_json, model, usage_json, duration_s, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (job_id, trace.stage_id, trace.attempt, trace.prompt_text, trace.response_text,
-         json.dumps(trace.vars_snapshot, ensure_ascii=False),
-         json.dumps([{"code": f.code, "check": f.check, "detail": f.detail}
-                     for f in trace.failures]),
-         trace.model, json.dumps(usage), round(trace.duration_s, 3), iso(utcnow())),
-    )
+    """Persist one LLM exchange (see lyrics.log_attempt — shared with the
+    art runner, which cannot import this module)."""
+    lyrics.log_attempt(db, job_id, trace)
 
 
 async def _run_lyrics_phase(rt, job: dict) -> None:
@@ -723,22 +708,36 @@ async def _run_lyrics_phase(rt, job: dict) -> None:
 
 
 async def lyrics_runner(rt) -> None:
-    """Serially process queued lyrics jobs (LLM pipeline, one at a time).
+    """Serially process queued LLM jobs — music lyrics (phase='lyrics')
+    and art image prompts (phase='art') — oldest first, one at a time.
 
-    Runs alongside the render runner; in the default (two-machine) mode a
-    job's lyrics generate while an earlier job renders. rt.gen_lock (set
-    when lyrics.serialize_with_render = true) serializes the two.
+    Art jobs are claimable only while the art pipeline is active; a
+    paused pipeline leaves them queued (they resume when re-enabled)
+    without blocking the music lyrics behind them.
     """
     log.info("lyrics runner started (llm: %s)", rt.llm.name if rt.llm else "off")
     while True:
         try:
-            job = rt.db.one(
-                "SELECT * FROM generation_jobs WHERE status = 'queued' AND phase = 'lyrics'"
-                " ORDER BY id LIMIT 1")
+            db = rt.db
+            job = db.one(
+                "SELECT * FROM generation_jobs WHERE status = 'queued'"
+                " AND phase = 'lyrics' ORDER BY id LIMIT 1")
+            art_job = None
+            if art.pipeline_active(rt):
+                art_job = db.one(
+                    "SELECT * FROM generation_jobs WHERE status = 'queued'"
+                    " AND phase = 'art' ORDER BY id LIMIT 1")
+            if job is not None and art_job is not None and art_job["id"] < job["id"]:
+                job = art_job
+            elif job is None:
+                job = art_job
             if not job or not rt.llm:
                 await asyncio.sleep(JOB_POLL_S)
                 continue
-            await _run_lyrics_phase(rt, job)
+            if job["phase"] == "art":
+                await art.run_art_phase(rt, job)
+            else:
+                await _run_lyrics_phase(rt, job)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -746,28 +745,61 @@ async def lyrics_runner(rt) -> None:
             await asyncio.sleep(JOB_POLL_S)
 
 
-async def job_runner(rt) -> None:
-    """Serially process queued render jobs (phase = 'render').
+def _claim_gpu_job(rt, last_phase: str) -> dict | None:
+    """The next GPU-side job: a queued music render or a queued art
+    render — ALTERNATING when both are non-empty (the images endpoint
+    typically proxies the same GPU that renders music, so neither queue
+    may starve the other). Art jobs are not claimable while the art
+    pipeline is paused; they wait, they don't fail."""
+    render = None
+    if rt.generator is not None:   # without a music backend, music render
+        render = rt.db.one(        # jobs wait (as before), never insta-fail
+            "SELECT * FROM generation_jobs WHERE status = 'queued' AND phase = 'render'"
+            " ORDER BY id LIMIT 1")
+    art_render = None
+    if art.pipeline_active(rt) and getattr(rt, "images", None) is not None:
+        art_render = rt.db.one(
+            "SELECT * FROM generation_jobs WHERE status = 'queued'"
+            " AND phase = 'art_render' ORDER BY id LIMIT 1")
+    if render is None:
+        return art_render
+    if art_render is None:
+        return render
+    return art_render if last_phase == "render" else render
 
-    Claims only render-phase jobs: instrumental prompt jobs enqueue
-    directly into this phase; lyrics jobs arrive here after the lyrics
-    runner flips their phase. The configured music backend renders one job
-    at a time, exactly as before the lyrics feature.
+
+async def job_runner(rt) -> None:
+    """Serially process queued render jobs: instrumental prompt jobs and
+    lyrics jobs after their pipeline finished (phase='render'), and art
+    renders (phase='art_render') — one at a time on the GPU side, with
+    the configured music backend rendering music jobs. When both kinds
+    are waiting the phases alternate (see _claim_gpu_job).
     """
     log.info("job runner started (backend: %s)", rt.generator.name if rt.generator else "off")
+    # Seed "art just ran", so when BOTH queues are non-empty after a
+    # restart the music render goes first — the stream must not wait on art.
+    last_phase = "art_render"
     while True:
         try:
-            job = rt.db.one(
-                "SELECT * FROM generation_jobs WHERE status = 'queued' AND phase = 'render'"
-                " ORDER BY id LIMIT 1")
-            if not job or not rt.generator:
+            job = _claim_gpu_job(rt, last_phase)
+            if not job:
                 await asyncio.sleep(JOB_POLL_S)
                 continue
+            last_phase = job["phase"]
 
             db, cfg = rt.db, rt.cfg
             db.execute("UPDATE generation_jobs SET status = 'running', submitted_at = ?,"
                        " render_started_at = ? WHERE id = ?",
                        (iso(utcnow()), iso(utcnow()), job["id"]))
+            if job["phase"] == "art_render":
+                # Art renders target an EXISTING track: no placeholder to
+                # create or fail, and a render error never touches the track.
+                try:
+                    await art.run_art_render(rt, job)
+                except Exception as exc:
+                    log.exception("job %s art render failed", job["id"])
+                    _fail_job(db, job["id"], str(exc))
+                continue
             track_id = None
             try:
                 req = build_request(db, job)
@@ -815,6 +847,9 @@ async def job_runner(rt) -> None:
                     for name in library.track_tags(db, job["parent_track_id"]):
                         library.apply_track_tags(db, cfg, track_id, [name])
                 _complete_job(db, job["id"], result)
+                # art.new_tracks: queue artwork for the fresh track (a
+                # no-op unless the art pipeline is on).
+                art.maybe_enqueue_for_track(rt, track_id)
             except Exception as exc:
                 log.exception("job %s failed", job["id"])
                 if track_id:
@@ -848,6 +883,7 @@ async def _commission_tick(rt) -> None:
 
     queued = rt.db.one(
         "SELECT COUNT(*) AS n FROM generation_jobs WHERE status = 'queued'"
+        " AND kind = 'music'"          # art jobs never gate music commissioning
     )["n"]
     if queued >= runtime_get(rt.cfg, rt.db, "dj.max_queued_jobs"):
         return
@@ -926,6 +962,7 @@ async def janitor_loop(rt) -> None:
         try:
             active = rt.feeder.active_ids if rt.feeder else set()
             janitor.run_janitor(rt.db, rt.cfg, active)
+            art.backfill_tick(rt)      # the art.backfill trickle (no-op when off)
         except asyncio.CancelledError:
             raise
         except Exception:

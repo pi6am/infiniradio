@@ -175,6 +175,32 @@ DEFAULTS: dict[str, Any] = {
     "prompts": {
         "seed_dir": "prompts",
     },
+    "art": {
+        # One directory per art workflow under workflows_dir (same shape as
+        # lyrics workflows: workflow.toml + Jinja templates, validated at
+        # startup). The LLM ([llm], shared with lyrics) turns track
+        # metadata into an image prompt; [art.api] renders it.
+        "workflows_dir": "art_workflows",
+        # Generation size, sent to the images API verbatim ("WxH").
+        "size": "1024x1024",
+        # Scaled copies stored beside the master (art.png): art_512.jpg,
+        # art_192.jpg, ... [] disables thumbnails entirely.
+        "thumbs": [512, 192],
+        # Thumbnail format: jpeg (small) or png (lossless end to end).
+        "thumb_format": "jpeg",
+        "thumb_quality": 90,
+        "api": {
+            # OpenAI-compatible POST {base_url}/images/generations.
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+            # Forward the job's seed to the API — only for proxies that map
+            # it onto a generator seed (strict OpenAI rejects unknown fields).
+            "send_seed": False,
+            "timeout_s": 300.0,
+            "transport_retries": 3,
+        },
+    },
     "naming": {
         # Word-list directory for generated track titles (one file per
         # slot: nouns.txt, adjectives.txt, verbs.txt, verbs_third.txt,
@@ -184,6 +210,16 @@ DEFAULTS: dict[str, Any] = {
 }
 
 # key -> (default, cast, human label, help) — editable from the admin panel.
+def _parse_bool(value: str) -> bool:
+    """Bool cast for RUNTIME_SETTINGS: the settings form submits strings,
+    and bool("false") is True — parse the usual spellings instead."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
     "dj.prompt_base_weight": (0.5, float, "Prompt selection base weight",
                               "Every prompt's selection weight is this plus the average Wilson score of "
@@ -229,6 +265,18 @@ RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
                                       "Condemned tracks keep their audio (counting toward quota, never aired) "
                                       "for this long before real deletion — review time against downvote waves. "
                                       "Admin can restore while trashed. 0 = delete immediately"),
+    "art.enabled": (False, _parse_bool, "Art generation",
+                    "Master switch for the track-art pipeline: no art jobs are claimed or "
+                    "enqueued while off (queued jobs pause, not fail; art renders interleave "
+                    "with music renders on the shared GPU)"),
+    "art.new_tracks": (True, _parse_bool, "Art for new tracks",
+                       "Queue an art job for each freshly generated track"),
+    "art.backfill": (False, _parse_bool, "Art backfill",
+                     "Trickle art jobs for old tracks that have none (oldest first; a track "
+                     "whose art job already failed once is skipped — regenerate it from its "
+                     "track page instead)"),
+    "art.backfill_max_queued": (1, int, "Art backfill queue",
+                                "At most this many backfill art jobs waiting at once"),
 }
 
 

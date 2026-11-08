@@ -116,6 +116,30 @@ def run() -> None:
         except SystemExit as exc:
             assert str(exc) == "2"
         print("4. [llm] backend = \"mock\" in config -> rejected (flag only)")
+
+        # 5. --mockart: art workflows load and the art routes wire up
+        cfg5 = _write_cfg(tmp, "art.toml", subdir="data5")
+        app_art = create_app(cfg5, mockaudio=True, mockllm=True, mockart=True)
+        assert app_art is not None
+        from infiniradio.web.routes_public import router as public_router
+        pub_paths = {r.path for r in public_router.routes}
+        assert "/art/{track_id}/{name}" in pub_paths, pub_paths
+        admin_paths = {r.path for r in admin_router.routes}
+        for need in ("/admin/track/{track_id}/art/regen",
+                     "/admin/track/{track_id}/art/remove",
+                     "/admin/art-workflows/{workflow_id}/toggle",
+                     "/admin/art-workflows/{workflow_id}/weight"):
+            assert need in admin_paths, f"missing route {need}"
+        print("5. --mockart loads art workflows; public /art + admin art routes wired")
+
+        # 6. images endpoint without an LLM: art stays off, music still starts
+        cfg_api = _write_cfg(tmp, "artapi.toml",
+                             extra='[art.api]\nbase_url = "http://127.0.0.1:9/v1"\n'
+                                   'model = "x"\n',
+                             subdir="data4")
+        app_api = create_app(cfg_api, mockaudio=True)
+        assert app_api is not None
+        print("6. [art.api] without [llm] -> art off, app starts")
         print("test_app: ALL PASSED")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

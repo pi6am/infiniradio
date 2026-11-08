@@ -14,11 +14,11 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
-from .. import dj, janitor, library, phrases
+from .. import art, dj, janitor, library, phrases
 from ..config import RUNTIME_SETTINGS, runtime_get
 from ..util import fmt_duration, human_bytes, iso, normalize_newlines, utcnow, wilson_score
 from ..web.auth import SESSION_COOKIE, LoginThrottle, Sessions, verify_password, stored_password_hash
-from ..web.routes_public import now_playing
+from ..web.routes_public import art_links, now_playing
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin")
@@ -556,11 +556,18 @@ async def track_page(request: Request, track_id: int):
     prompts = db.query("SELECT id, name FROM prompts WHERE enabled = 1 ORDER BY name")
     gen_job = db.one("SELECT id, status FROM generation_jobs WHERE track_id = ?"
                      " ORDER BY id DESC LIMIT 1", (track_id,))
+    art_job = db.one("SELECT id, status FROM generation_jobs WHERE kind = 'art'"
+                     " AND track_id = ? ORDER BY id DESC LIMIT 1", (track_id,))
     return request.app.state.templates.TemplateResponse(
         request, "admin/track.html",
         _ctx(request, t=track, parent=parent,
              children=[_track_with_meta(db, c) for c in children],
-             votes=votes, plays=plays, prompts=prompts, gen_job=gen_job))
+             votes=votes, plays=plays, prompts=prompts, gen_job=gen_job,
+             art=art_links(rt.cfg, track_id, row["art_version"] or 0),
+             art_job=art_job,
+             art_workflows=art.enabled_art_workflows(rt),
+             art_ready=(getattr(rt, "images", None) is not None
+                        and bool(getattr(rt, "artworkflows", {})))))
 
 
 @router.get("/track/{track_id}/audio")
@@ -622,6 +629,38 @@ async def track_protect(request: Request, track_id: int, csrf: str = Form("")):
     if row:
         rt.db.execute("UPDATE tracks SET protected = ? WHERE id = ?",
                       (0 if row["protected"] else 1, track_id))
+    return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
+
+
+@router.post("/track/{track_id}/art/regen")
+async def track_art_regen(request: Request, track_id: int,
+                          workflow: str = Form(""), csrf: str = Form("")):
+    """Queue an art (re)generation for one track — the dev/production
+    iteration loop. Empty workflow = the weighted pick; an explicit name
+    forces that workflow. Works while the art master switch is off (the
+    job waits for it), but not without the images backend."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    if getattr(rt, "images", None) is None or not getattr(rt, "artworkflows", {}):
+        return PlainTextResponse("art is not configured (images backend / workflows)",
+                                 status_code=400)
+    job_id = art.enqueue_art_job(rt, track_id,
+                                 workflow_id=workflow.strip() or None)
+    if job_id is None:
+        return PlainTextResponse("track is not ready or no art workflow is pickable",
+                                 status_code=400)
+    log.info("art regeneration for track %s queued from admin panel (job %s)",
+             track_id, job_id)
+    return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
+
+
+@router.post("/track/{track_id}/art/remove")
+async def track_art_remove(request: Request, track_id: int, csrf: str = Form("")):
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    library.remove_art(rt.db, rt.cfg, track_id)
     return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
 
 
@@ -892,10 +931,25 @@ async def prompts_page(request: Request):
                           "aired": stats["aired"],
                           "avg_score": round(stats["avg_score"], 3),
                           "weight": round(weight, 3) if weight is not None else None})
+    # Art workflows: same table shape, but the weight is the file default
+    # with a live admin override (a settings-table map, no restart).
+    artworkflows = []
+    art_off = set(rt.db.get_setting("art_workflows_disabled") or [])
+    for w in getattr(rt, "artworkflows", {}).values():
+        tracks = rt.db.one(
+            "SELECT COUNT(*) AS n FROM tracks WHERE art_workflow_id = ?"
+            " AND art_version > 0", (w.name,))["n"]
+        on = w.enabled and w.name not in art_off
+        artworkflows.append({"name": w.name, "description": w.description,
+                             "enabled": on, "file_enabled": w.enabled,
+                             "abstract": w.abstract, "stages": len(w.stages),
+                             "tracks": tracks,
+                             "weight": round(art.effective_weight(rt.db, w), 3),
+                             "file_weight": w.weight})
     return request.app.state.templates.TemplateResponse(
         request, "admin/prompts.html",
         _ctx(request, prompts=prompts, workflows=workflows,
-             has_llm=rt.llm is not None))
+             artworkflows=artworkflows, has_llm=rt.llm is not None))
 
 
 @router.post("/workflows/{workflow_id}/toggle")
@@ -918,6 +972,49 @@ async def workflow_toggle(request: Request, workflow_id: str, csrf: str = Form("
     else:
         disabled.append(workflow_id)
     rt.db.set_setting("workflows_disabled", disabled)
+    return RedirectResponse(_back(request, "/admin/prompts"), status_code=303)
+
+
+@router.post("/art-workflows/{workflow_id}/toggle")
+async def art_workflow_toggle(request: Request, workflow_id: str, csrf: str = Form("")):
+    """Enable/disable an art workflow at runtime (settings table — same
+    semantics as the lyrics workflow toggle)."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    spec = getattr(rt, "artworkflows", {}).get(workflow_id)
+    if spec is None:
+        return PlainTextResponse("no such art workflow", status_code=404)
+    if spec.abstract:
+        return PlainTextResponse("abstract bases are never picked — nothing to toggle",
+                                 status_code=400)
+    disabled = list(rt.db.get_setting("art_workflows_disabled") or [])
+    if workflow_id in disabled:
+        disabled.remove(workflow_id)
+    else:
+        disabled.append(workflow_id)
+    rt.db.set_setting("art_workflows_disabled", disabled)
+    return RedirectResponse(_back(request, "/admin/prompts"), status_code=303)
+
+
+@router.post("/art-workflows/{workflow_id}/weight")
+async def art_workflow_weight(request: Request, workflow_id: str,
+                              weight: str = Form(""), csrf: str = Form("")):
+    """Retune an art workflow's pick weight live: stored in the
+    art_workflow_weights settings map, overriding the file default."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    spec = getattr(rt, "artworkflows", {}).get(workflow_id)
+    if spec is None:
+        return PlainTextResponse("no such art workflow", status_code=404)
+    try:
+        value = max(0.0, float(weight))
+    except ValueError:
+        return PlainTextResponse("weight must be a number", status_code=400)
+    overrides = dict(rt.db.get_setting("art_workflow_weights") or {})
+    overrides[workflow_id] = value
+    rt.db.set_setting("art_workflow_weights", overrides)
     return RedirectResponse(_back(request, "/admin/prompts"), status_code=303)
 
 
@@ -1351,18 +1448,21 @@ async def jobs_page(request: Request):
 
 
 def _stage_progress(rt, job: dict) -> str:
-    """'4/7 · style' — completed/total stages of a job's lyrics phase, read
-    from the live progress column (persisted as each stage completes)."""
+    """'4/7 · style' — completed/total stages of a job's LLM phase (lyrics
+    or art prompt), read from the live progress column (persisted as each
+    stage completes)."""
     import json as _json
 
-    if job.get("phase") != "lyrics" or not job.get("workflow_id"):
+    if job.get("phase") not in ("lyrics", "art") or not job.get("workflow_id"):
         return ""
     try:
         progress = _json.loads(job.get("progress") or "{}")
     except _json.JSONDecodeError:
         return ""
     completed = progress.get("completed") or []
-    spec = getattr(rt, "workflows", {}).get(job["workflow_id"])
+    registry = (getattr(rt, "artworkflows", {})
+                if job.get("kind") == "art" else getattr(rt, "workflows", {}))
+    spec = registry.get(job["workflow_id"])
     total = len(spec.stages) if spec else None
     label = f"{len(completed)}/{total}" if total else f"{len(completed)} stages done"
     return label + (f" · {completed[-1]}" if completed else "")
@@ -1449,7 +1549,9 @@ async def job_detail(request: Request, job_id: int):
             outputs = {}
     llm_s = sum(s["duration_s"] or 0.0 for s in stages)
     llm_conts = sum(int((s.get("usage") or {}).get("continuations") or 0) for s in stages)
-    workflow = rt.workflows.get(job["workflow_id"]) if job.get("workflow_id") else None
+    registry = (getattr(rt, "artworkflows", {})
+                if job.get("kind") == "art" else rt.workflows)
+    workflow = registry.get(job["workflow_id"]) if job.get("workflow_id") else None
     return request.app.state.templates.TemplateResponse(
         request, "admin/job.html",
         _ctx(request, j=job, stages=stages, outputs=outputs, workflow=workflow,
@@ -1492,15 +1594,17 @@ async def job_cancel(request: Request, job_id: int, csrf: str = Form("")):
         rt.db.execute("UPDATE generation_jobs SET status = 'cancelled',"
                       " finished_at = ? WHERE id = ?", (iso(utcnow()), job_id))
     elif job and job["status"] == "running":
-        if rt.generator and job.get("phase") != "lyrics":
+        # Only a music render can interrupt the music backend; art jobs
+        # (either phase) notice the status change through their guards —
+        # the images call itself cannot be interrupted mid-flight.
+        if rt.generator and job.get("phase") == "render":
             await rt.generator.interrupt()
-        # A lyrics-phase job needs no backend interrupt; its runner notices
-        # the status change between stages/attempts and stops.
         rt.db.execute("UPDATE generation_jobs SET status = 'cancelled',"
                       " finished_at = ? WHERE id = ?", (iso(utcnow()), job_id))
         # The placeholder track would otherwise count as "generating"
         # forever; fail_track only touches it if it is still generating, so
-        # a generation that completed concurrently stays ready.
+        # a generation that completed concurrently stays ready. Art jobs
+        # point at a READY track — fail_track is a no-op there by design.
         if job["track_id"]:
             library.fail_track(rt.db, job["track_id"])
         log.info("cancelled running job %s (track %s finalized)",

@@ -122,6 +122,30 @@ max_attempts = 3          # planning passes per job before the job fails
 max_chars = 5000          # reject planned scores longer than this
 min_chars = 300           # reject planned scores shorter than this
 
+# ---- Track art (optional) ----
+# The LLM ([llm] above) turns track metadata into an image prompt through
+# a data-driven workflow (art_workflows/); [art.api] renders it. Art jobs
+# interleave with music renders on the GPU-side runner, so a queue of art
+# never starves track generation (nor the reverse). Enable/disable and the
+# backfill switches are runtime settings (admin panel → settings).
+[art]
+# art_workflows_dir = "art_workflows"   # default; one dir per workflow
+size = "1024x1024"      # sent to the images API verbatim
+thumbs = [512, 192]     # scaled copies (512 = web card, 192 = media session)
+thumb_format = "jpeg"   # "png" for a fully lossless pipeline
+thumb_quality = 90      # jpeg quality (2-100)
+
+[art.api]
+# OpenAI-compatible POST {base_url}/images/generations. Typically a small
+# proxy in front of the same GPU that renders music.
+base_url = ""           # e.g. http://127.0.0.1:8000/v1
+api_key = ""
+model = ""
+# Forward the job's seed — only for proxies that map it onto a generator
+# seed; strict OpenAI-compatible servers reject unknown fields.
+send_seed = false
+timeout_s = 300.0
+
 [library]
 data_dir = "data"         # database, music files and HLS segments live under here
 playout_bitrate = "192k"  # bitrate of the normalized playout copy

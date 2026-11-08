@@ -10,7 +10,7 @@ from .util import setup_logging
 
 
 def cmd_serve(config: str | None, verbose: bool, mockaudio: bool = False,
-              mockllm: bool = False) -> int:
+              mockllm: bool = False, mockart: bool = False) -> int:
     import uvicorn
 
     from .app import create_app
@@ -18,7 +18,7 @@ def cmd_serve(config: str | None, verbose: bool, mockaudio: bool = False,
 
     setup_logging(verbose)
     cfg = load_config(config)
-    app = create_app(config, mockaudio=mockaudio, mockllm=mockllm)
+    app = create_app(config, mockaudio=mockaudio, mockllm=mockllm, mockart=mockart)
     uvicorn.run(
         app,
         host=str(cfg.get("server.host", "127.0.0.1")),
@@ -69,13 +69,17 @@ def main() -> None:
     ap.add_argument("--mockllm", action="store_true",
                     help="use the scripted mock LLM client (no endpoint needed) "
                          "so lyrics workflows can be pipeline-tested")
+    ap.add_argument("--mockart", action="store_true",
+                    help="use the mock images client (fixed PNG, no endpoint) "
+                         "so art generation can be pipeline-tested")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("passwd", help="set the admin password")
     args = ap.parse_args()
 
     if args.cmd == "passwd":
         raise SystemExit(cmd_passwd(args.config))
-    raise SystemExit(cmd_serve(args.config, args.verbose, args.mockaudio, args.mockllm))
+    raise SystemExit(cmd_serve(args.config, args.verbose, args.mockaudio,
+                               args.mockllm, args.mockart))
 
 
 if __name__ == "__main__":

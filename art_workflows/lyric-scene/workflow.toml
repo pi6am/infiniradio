@@ -1,0 +1,27 @@
+name = "lyric-scene"
+description = "A single vivid scene lifted straight out of the lyrics"
+enabled = true
+weight = 1.0
+
+# Only tracks with authored lyrics — instrumental snapshots have no scene
+# to lift (the cover workflows serve those).
+[requires]
+lyrics = true
+
+[[stage]]
+id = "scene"
+template = "scene.j2.md"
+max_attempts = 3
+feedback_template = "feedback.j2.md"
+[stage.gate]
+max_chars = 900
+min_chars = 60
+[stage.extract]
+image_prompt = [
+  '(?s)```text\n(.*?)\n```',
+  '(?s)```\n(.*?)\n```',
+  '(?s)image prompt:\s*(.+)',
+]
+
+[output]
+prompt = "image_prompt"

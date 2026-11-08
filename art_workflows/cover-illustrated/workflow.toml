@@ -1,0 +1,7 @@
+name = "cover-illustrated"
+description = "Album covers as flat-color illustration / screen print"
+base = "cover"
+weight = 2.0
+
+[params]
+medium = "flat-color illustration with screen-print texture and a limited palette"

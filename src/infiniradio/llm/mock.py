@@ -175,6 +175,31 @@ But it melts that way
 Oh, Velveeta
 Oh, Velveeta
 ```"""),
+    # Art workflows (art_workflows/): same keyword-follows-the-stage
+    # scheme. Must precede the generic "tags" needle — the art templates
+    # list track tags ("Tags: ...") and would otherwise resolve to the
+    # lyrics tagging reply.
+    ("art director of an internet radio", """\
+A single stained-glass cathedral silhouette rising out of a neon-lit rain
+puddle on an empty street at night; the reflection carries the color while
+the building above stays dark. Cool blues and magentas, one warm amber
+window. Centered, symmetrical, poster-like calm."""),
+    ("Turn that concept into the final image-generation prompt", """\
+```text
+A dark cathedral silhouette in flat-color illustration with screen-print
+texture, centered and symmetrical, rising from a rain puddle that mirrors
+it in neon magenta and electric blue; one warm amber window glows at its
+heart; limited palette of five inks, crisp edges, subtle grain, night
+mood, square album-cover composition, no text or lettering
+```"""),
+    ("image-generation prompts for an internet radio", """\
+```text
+A rain-slicked empty street at night shot on 35mm: a lone figure under a
+bus shelter, neon signs reflected as long streaks of magenta and cyan in
+the puddles, distant traffic lights as warm bokeh, gentle film grain,
+wide centered composition with the figure small against the glowing city,
+cinematic night mood, no text or lettering
+```"""),
     ("tags", "rock, pop, male vocal"),
 ]
 

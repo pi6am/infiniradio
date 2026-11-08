@@ -4,6 +4,8 @@ Layout under data_dir:
   music/<track_id>/original.<ext>   as generated (flac or mp3)
   music/<track_id>/playout.m4a     loudness-normalized AAC used on air
   music/<track_id>/score.abc        ABC notation (also stored in the DB row)
+  music/<track_id>/art.png          track art master (normalized to PNG)
+  music/<track_id>/art_512.jpg ...  scaled thumbnails (art.thumbs sizes)
 """
 
 from __future__ import annotations
@@ -322,6 +324,143 @@ def my_votes(db: DB, listener_id: str) -> dict[int, int]:
 def disk_usage(db: DB) -> int:
     row = db.one("SELECT COALESCE(SUM(size_bytes), 0) AS n FROM tracks WHERE status != 'deleted'")
     return int(row["n"]) if row else 0
+
+
+# ---------------------------------------------------------------- track art
+
+_LYRICS_HDR = re.compile(r"^\s*\[[^\]]*\]\s*$")
+
+
+def authored_lyrics(text: str | None) -> str | None:
+    """Lyrics with whole-line section headers ([Verse 1], [Chorus],
+    [Instrumental], ...) dropped and blank runs collapsed. None when
+    nothing survives — instrumental snapshots are only the placeholder
+    [Intro]/[Instrumental]/[Outro] skeleton (ad-libbing lives in the
+    audio, never the text) — so this doubles as THE has-authored-lyrics
+    test for everything downstream (player display, art workflow
+    predicates)."""
+    if not text:
+        return None
+    kept = [ln.rstrip() for ln in text.splitlines() if not _LYRICS_HDR.match(ln)]
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    return cleaned or None
+
+
+_ART_GLOB = ("art.png", "art_*.png", "art_*.jpg", "art_*.jpeg", "art_*.webp")
+
+
+def art_file_map(cfg: Config, track_id: int) -> dict[str, Path]:
+    """Every art file that exists for a track, keyed by its URL stem:
+    'full' (the master) and each thumbnail's pixel size ('512', '192',
+    ...). Derived from disk, not config — a later format/size change
+    leaves older files serving until the track's next regeneration."""
+    tdir = track_dir(cfg, track_id)
+    out: dict[str, Path] = {}
+    if not tdir.is_dir():
+        return out
+    if (tdir / "art.png").is_file():
+        out["full"] = tdir / "art.png"
+    for pattern in _ART_GLOB[1:]:
+        for p in tdir.glob(pattern):
+            stem = p.stem[len("art_"):]
+            if stem.isdigit():
+                out.setdefault(stem, p)
+    return out
+
+
+def _art_bytes(cfg: Config, track_id: int) -> int:
+    tdir = track_dir(cfg, track_id)
+    if not tdir.is_dir():
+        return 0
+    return sum(p.stat().st_size for pattern in _ART_GLOB for p in tdir.glob(pattern)
+               if p.is_file())
+
+
+async def _ffmpeg(cfg: Config, *args: str) -> None:
+    cmd = [cfg.get("stream.ffmpeg_path", "ffmpeg"), "-hide_banner",
+           "-loglevel", "error", "-y", *args]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {err.decode(errors='replace').strip()}")
+
+
+def _jpeg_q(quality: int) -> int:
+    """ffmpeg mjpeg -q:v runs 2 (best) .. 31 (worst); map a 2-100 scale."""
+    q = 2 + (100 - max(2, min(100, int(quality)))) * 29 // 100
+    return max(2, min(31, q))
+
+
+async def store_art(db: DB, cfg: Config, track_id: int, image_bytes: bytes, *,
+                    seed: int | None, workflow_id: str | None, prompt: str) -> dict:
+    """Write a track's artwork: master art.png (any provider format is
+    normalized through ffmpeg), then the configured thumbnails (scaled;
+    jpeg by default, png when art.thumb_format = "png" for a lossless
+    pipeline). Bumps art_version — the public /art URLs carry it (?v=),
+    so caches never serve a replaced image. Art bytes count toward
+    size_bytes so the disk quota stays honest."""
+    tdir = track_dir(cfg, track_id)
+    tdir.mkdir(parents=True, exist_ok=True)
+    old_bytes = _art_bytes(cfg, track_id)
+
+    master = tdir / "art.png"
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        master.write_bytes(image_bytes)
+    else:
+        # jpeg/webp/whatever the endpoint returned: ffmpeg sniffs the
+        # content itself, so the temp name's extension is irrelevant.
+        raw = tdir / "art_in.tmp"
+        raw.write_bytes(image_bytes)
+        try:
+            await _ffmpeg(cfg, "-i", str(raw), str(master))
+        finally:
+            raw.unlink(missing_ok=True)
+    if not master.is_file():
+        raise RuntimeError("art normalization produced no master image")
+
+    thumb_ext = "png" if str(cfg.get("art.thumb_format", "jpeg")) == "png" else "jpg"
+    for size in cfg.get("art.thumbs") or []:
+        n = int(size)
+        if n <= 0:
+            continue
+        out = tdir / f"art_{n}.{thumb_ext}"
+        args = ["-i", str(master), "-vf", f"scale={n}:{n}"]
+        if thumb_ext == "jpg":
+            args += ["-q:v", str(_jpeg_q(int(cfg.get("art.thumb_quality", 90))))]
+        await _ffmpeg(cfg, *args, str(out))
+
+    new_bytes = _art_bytes(cfg, track_id)
+    row = db.one("SELECT art_version FROM tracks WHERE id = ?", (track_id,))
+    db.execute(
+        "UPDATE tracks SET art_version = ?, art_seed = ?, art_workflow_id = ?,"
+        " art_prompt = ?, art_generated_at = ?,"
+        " size_bytes = MAX(0, size_bytes - ?) + ? WHERE id = ?",
+        ((row["art_version"] if row else 0) + 1, seed, workflow_id,
+         prompt[:4000], iso(utcnow()), old_bytes, new_bytes, track_id))
+    log.info("stored art for track %s (%s)", track_id, human_bytes(new_bytes))
+    return db.one("SELECT * FROM tracks WHERE id = ?", (track_id,)) or {}
+
+
+def remove_art(db: DB, cfg: Config, track_id: int) -> bool:
+    """Delete a track's art files and reset the art columns."""
+    tdir = track_dir(cfg, track_id)
+    old_bytes = _art_bytes(cfg, track_id)
+    removed = False
+    if tdir.is_dir():
+        for pattern in _ART_GLOB:
+            for p in tdir.glob(pattern):
+                if p.is_file():
+                    p.unlink(missing_ok=True)
+                    removed = True
+    if not removed:
+        return False
+    db.execute(
+        "UPDATE tracks SET art_version = 0, art_seed = NULL, art_workflow_id = NULL,"
+        " art_prompt = NULL, art_generated_at = NULL,"
+        " size_bytes = MAX(0, size_bytes - ?) WHERE id = ?", (old_bytes, track_id))
+    log.info("removed art from track %s (%s)", track_id, human_bytes(old_bytes))
+    return True
 
 
 # ---------------------------------------------------------------- tags

@@ -122,15 +122,25 @@ async def _main(rt, cfg) -> None:
 
     # migration 13 repairs the frozen window from play_log: counts ratchet
     # UP to the airing rows, never down (counts above the row count are
-    # legitimate — the old skip behavior deleted a flushed airing's row)
+    # legitimate — the old skip behavior deleted a flushed airing's row).
+    # Replay = run 13's SQL directly and re-stamp it (and every LATER
+    # one-shot migration, e.g. 14's ALTERs) as already applied.
+    from infiniradio.db import MIGRATIONS
+
+    def _replay_13():
+        later = [r["v"] for r in db.query(
+            "SELECT version AS v FROM schema_version WHERE version > 13")]
+        db.execute("DELETE FROM schema_version WHERE version >= 13")
+        db.conn.executescript(MIGRATIONS[13])
+        for v in (13, *later):
+            db.execute("INSERT INTO schema_version (version) VALUES (?)", (v,))
+
     db.execute("UPDATE tracks SET play_count = 1 WHERE id = ?", (tid,))
-    db.execute("DELETE FROM schema_version WHERE version >= 13")
-    db.migrate()
+    _replay_13()
     assert db.one("SELECT play_count AS pc FROM tracks WHERE id = ?",
                   (tid,))["pc"] == 3   # three airing rows now
     db.execute("UPDATE tracks SET play_count = 99 WHERE id = ?", (tid,))
-    db.execute("DELETE FROM schema_version WHERE version >= 13")
-    db.migrate()
+    _replay_13()
     assert db.one("SELECT play_count AS pc FROM tracks WHERE id = ?",
                   (tid,))["pc"] == 99
     print("migration 13: ratchets frozen counts up to airing rows, never lowers")

@@ -260,6 +260,24 @@ MIGRATIONS: dict[int, str] = {
       SELECT COUNT(*) FROM play_log WHERE play_log.track_id = tracks.id
     );
     """,
+    14: """
+    -- Track art pipeline. generation_jobs.kind separates art jobs from
+    -- music jobs ('music' default): art jobs run phase 'art' (the LLM
+    -- writes an image prompt) then 'art_render' (the images backend
+    -- renders it), with track_id pointing at the EXISTING track being
+    -- decorated — never a placeholder, so the retry/cancel paths must
+    -- not touch the track row.
+    ALTER TABLE generation_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'music';
+    -- tracks: art_version increments on every (re)generation and versions
+    -- the public /art URLs (?v= — immutable caching without purges);
+    -- art_prompt keeps the LLM-written image prompt (provenance); seed
+    -- and workflow reproduce the render.
+    ALTER TABLE tracks ADD COLUMN art_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE tracks ADD COLUMN art_seed INTEGER;
+    ALTER TABLE tracks ADD COLUMN art_workflow_id TEXT;
+    ALTER TABLE tracks ADD COLUMN art_prompt TEXT;
+    ALTER TABLE tracks ADD COLUMN art_generated_at TEXT;
+    """,
 }
 
 
