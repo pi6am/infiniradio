@@ -14,7 +14,7 @@ template = "scene.j2.md"
 max_attempts = 3
 feedback_template = "feedback.j2.md"
 [stage.gate]
-max_chars = 900
+max_chars = 2048
 min_chars = 60
 [stage.extract]
 image_prompt = [

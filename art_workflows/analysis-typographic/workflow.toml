@@ -12,7 +12,7 @@ template = "analyze.j2.md"
 max_attempts = 3
 feedback_template = "feedback.j2.md"
 [stage.gate]
-max_chars = 2200
+max_chars = 4096
 min_chars = 120
 [stage.extract]
 image_prompt = [

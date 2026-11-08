@@ -10,8 +10,13 @@ id = "concept"
 template = "concept.j2.md"
 saves = "concept"
 max_attempts = 2
+# Re-roll retries in a BLANK conversation: without this, the failed reply
+# stays in the history and the model (especially quantized ones) re-emits
+# it verbatim — temperature does not fix that. A concept is a standalone
+# artifact, so nothing depends on the failed thread.
+fresh_retries = true
 [stage.gate]
-max_chars = 700
+max_chars = 4096
 min_chars = 30
 
 [[stage]]
@@ -21,7 +26,7 @@ thread = "continue"
 max_attempts = 3
 feedback_template = "feedback.j2.md"
 [stage.gate]
-max_chars = 900
+max_chars = 2048
 min_chars = 60
 [stage.extract]
 image_prompt = [
