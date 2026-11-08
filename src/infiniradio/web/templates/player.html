@@ -18,7 +18,7 @@
   presentation; the image's own shape never picks the layout). Without
   .has-art the card is exactly the pre-art presentation. */
   #np-art-col, #np-art-slot, #np-art { display: none; }
-  #np-card.has-art #np-art { display: block; border-radius: 8px; }
+  #np-card.has-art #np-art { display: block; border-radius: 8px; cursor: zoom-in; }
   /* Portrait screen: centered between title and subtitle, scaled to the
      available width (capped) — smaller on narrow phones, never overflow */
   #np-card.has-art.portrait #np-art-slot { display: block; }
@@ -32,6 +32,18 @@
   #np-card.has-art.landscape #np-art-col { display: block; flex: none; width: 160px; }
   #np-card.has-art.landscape #np-main { flex: 1; min-width: 0; }
   #np-card.has-art.landscape #np-art { width: 100%; height: auto; }
+  /* Lightbox: tap the art to view the full-resolution master */
+  #np-lightbox {
+    display: none; position: fixed; inset: 0; z-index: 50;
+    background: rgba(10, 12, 16, 0.92);
+    align-items: center; justify-content: center; cursor: zoom-out;
+  }
+  #np-lightbox.open { display: flex; }
+  #np-lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 8px; }
+  #np-lightbox .lb-close {
+    position: absolute; top: 14px; right: 16px;
+    font-size: 17px; line-height: 1; padding: 6px 10px;
+  }
 </style>
 {% endblock %}
 {% block content %}
@@ -157,7 +169,8 @@
   });
   artSideMQ.addEventListener('change', layoutArt);
   function setTrackArt(art) {
-    if (art && art.card) {
+    curArt = (art && art.card) ? art : null;
+    if (curArt) {
       artShown = true;
       if (elArt.getAttribute('src') !== art.card) {  // ?v= busts per regen
         artLoaded = false;
@@ -171,6 +184,39 @@
       elArt.removeAttribute('src');
     }
   }
+
+  // ---- lightbox: tap the art for the full-resolution master ----------------
+  let curArt = null;              // the current track's art links
+  const lb = document.createElement('div');
+  lb.id = 'np-lightbox';
+  lb.setAttribute('role', 'dialog');
+  lb.setAttribute('aria-modal', 'true');
+  const lbImg = document.createElement('img');
+  lbImg.alt = '';
+  const lbClose = document.createElement('button');
+  lbClose.className = 'lb-close';
+  lbClose.type = 'button';
+  lbClose.textContent = '\u2715';
+  lb.append(lbImg, lbClose);
+  document.body.append(lb);
+  function openLightbox() {
+    if (!curArt) return;
+    const cur = sched && sched.current;
+    lbImg.alt = (cur && cur.title) || '';
+    lbImg.src = curArt.master || curArt.card;
+    lb.classList.add('open');
+    document.body.style.overflow = 'hidden';   // no page scroll behind
+  }
+  function closeLightbox() {
+    lb.classList.remove('open');
+    document.body.style.overflow = '';
+    lbImg.removeAttribute('src');              // stop a still-loading master
+  }
+  elArt.addEventListener('click', openLightbox);
+  lb.addEventListener('click', closeLightbox);   // tap anywhere to dismiss
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeLightbox();
+  });
 
   // ---- rendering (all text via textContent; DOM built by hand) -------------
   function fmtDur(s) {
