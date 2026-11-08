@@ -350,8 +350,10 @@ def backfill_waiting(db: DB) -> int:
 
 
 def backfill_tick(rt) -> None:
-    """The art.backfill trickle (janitor clock): enqueue art for the oldest
-    ready track that never had an art job, within the queue budget.
+    """The art.backfill trickle (janitor clock): keep the art queue FILLED
+    to art.backfill_max_queued — each tick enqueues every job the budget
+    has headroom for (max(0, budget - active)), not just one, so the
+    cadence of this tick never becomes the throughput limit.
 
     "Never had one" is deliberate: a track whose art job FAILED is not
     retried automatically (that would loop a broken workflow against the
@@ -372,10 +374,12 @@ def backfill_tick(rt) -> None:
     active = rt.db.one(
         "SELECT COUNT(*) AS n FROM generation_jobs WHERE kind = 'art'"
         " AND status IN ('queued', 'running')")["n"]
-    if active >= budget:
-        return
-    row = rt.db.one("SELECT t.id" + _BACKFILL_WHERE + " ORDER BY t.id LIMIT 1")
-    if row:
+    for _ in range(max(0, budget - active)):
+        # Freshly enqueued jobs drop their tracks out of _BACKFILL_WHERE,
+        # so each iteration picks the next-oldest eligible track.
+        row = rt.db.one("SELECT t.id" + _BACKFILL_WHERE + " ORDER BY t.id LIMIT 1")
+        if row is None:
+            break
         enqueue_art_job(rt, row["id"])
 
 

@@ -321,24 +321,29 @@ async def _main(cfg, tmp) -> None:
     db.set_setting("art.new_tracks", True)
     art.maybe_enqueue_for_track(rt, fresh)
     assert db.one("SELECT COUNT(*) AS n FROM generation_jobs")["n"] == 1
-    # backfill: oldest artless track first, within budget; failed jobs are
+    # backfill: fills the budget each tick, oldest first; failed jobs are
     # never retried by the trickle
     db.execute("DELETE FROM generation_jobs")
     db.execute("UPDATE tracks SET art_id = NULL")
     db.set_setting("art.backfill", True)
+    db.set_setting("art.backfill_max_queued", 1)
     oldest = db.one("SELECT MIN(id) AS m FROM tracks WHERE status = 'ready'")["m"]
     art.backfill_tick(rt)
     job = db.one("SELECT * FROM generation_jobs")
     assert job["track_id"] == oldest and job["kind"] == "art"
     art.backfill_tick(rt)   # budget 1 already used by the queued job
     assert db.one("SELECT COUNT(*) AS n FROM generation_jobs")["n"] == 1
+    db.set_setting("art.backfill_max_queued", 3)
+    art.backfill_tick(rt)   # fills ALL headroom, not one per tick
+    assert db.one("SELECT COUNT(*) AS n FROM generation_jobs"
+                  " WHERE status = 'queued'")["n"] == 3
     db.execute("UPDATE generation_jobs SET status = 'failed'")
-    art.backfill_tick(rt)   # the failed track is never re-enqueued...
+    art.backfill_tick(rt)   # the failed tracks are never re-enqueued...
     job2 = db.one("SELECT * FROM generation_jobs ORDER BY id DESC LIMIT 1")
     assert job2["track_id"] != oldest, (job2["track_id"], oldest)
-    assert db.one("SELECT COUNT(*) AS n FROM generation_jobs")["n"] == 2
-    print(f"auto-enqueue gated by enabled/new_tracks; backfill oldest-first "
-          f"(track {oldest}), budgeted, failed tracks skipped not retried")
+    assert db.one("SELECT COUNT(*) AS n FROM generation_jobs")["n"] == 6
+    print(f"auto-enqueue gated by pipeline/new_tracks; backfill fills the "
+          f"budget per tick (oldest first, track {oldest}), failed tracks skipped")
 
     # ---- images client: model is optional ------------------------------------
     from infiniradio.config import Config as _Config
