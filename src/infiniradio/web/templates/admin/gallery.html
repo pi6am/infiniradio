@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block bodyclass %}wide{% endblock %}
+{% block title %}admin — gallery{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">art gallery</h2>
+  <p class="muted" style="margin-top:0">{{ total }} track(s) with art ·
+    current picks, newest first{% if total > entries | length %} ·
+    showing {{ entries | length }}{% endif %}</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px">
+    {% for e in entries %}
+    <a href="/admin/track/{{ e.track_id }}" style="text-decoration:none;color:inherit">
+      <img src="{{ e.card }}" alt="{{ e.title }}" title="{{ e.title }} — {{ e.workflow_id or '?' }}"
+           style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px">
+      <div style="margin-top:6px">{{ e.title }}</div>
+      <div class="muted" style="font-size:12px">#{{ e.art_id }} · {{ e.workflow_id or '?' }} · {{ e.art_at[:10] }}
+        {% if e.status != 'ready' %} · {{ e.status }}{% endif %}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% if not entries %}<p class="muted">no tracks with art yet</p>{% endif %}
+</div>
+{% endblock %}

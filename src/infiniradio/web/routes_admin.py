@@ -1463,6 +1463,43 @@ async def tags_delete(request: Request, tag_id: int, csrf: str = Form("")):
     return RedirectResponse("/admin/tags", status_code=303)
 
 
+# ------------------------------------------------------------------ gallery
+
+def _gallery_entries(db, cfg, limit: int) -> list[dict]:
+    """The review grid's data: every track's CURRENT art, newest image
+    first. Only tracks with a live pick (and files on disk) appear — the
+    point is reviewing what listeners see, not the per-track history
+    (that's the track page's gallery)."""
+    rows = db.query(
+        "SELECT t.id AS track_id, t.title, t.status, ta.id AS art_id,"
+        " ta.workflow_id, ta.created_at AS art_at"
+        " FROM tracks t JOIN track_art ta ON ta.id = t.art_id"
+        " WHERE t.status != 'deleted'"
+        " ORDER BY ta.id DESC LIMIT ?", (limit,))
+    out = []
+    for r in rows:
+        links = art_links_for(cfg, r["track_id"], r["art_id"])
+        if links is None:
+            continue   # files gone (deleted behind the DB's back)
+        out.append(dict(r) | links)
+    return out
+
+
+@router.get("/gallery", response_class=HTMLResponse)
+async def gallery_page(request: Request, n: int = 100):
+    if not _is_admin(request):
+        return _login_redirect()
+    rt = request.app.state.rt
+    n = max(10, min(n, 500))
+    total = rt.db.one(
+        "SELECT COUNT(*) AS n FROM tracks t JOIN track_art ta ON ta.id = t.art_id"
+        " WHERE t.status != 'deleted'")["n"]
+    return request.app.state.templates.TemplateResponse(
+        request, "admin/gallery.html",
+        _ctx(request, entries=_gallery_entries(rt.db, rt.cfg, n),
+             n=n, total=total))
+
+
 # ------------------------------------------------------------------ jobs
 
 @router.get("/jobs", response_class=HTMLResponse)

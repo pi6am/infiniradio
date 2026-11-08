@@ -41,6 +41,7 @@ def run() -> None:
         paths = {r.path for r in admin_router.routes}
         for need in ("/admin/jobs/{job_id}", "/admin/styles",
                      "/admin/styles/edit/{style_id}", "/admin/workflows/{workflow_id}/toggle",
+                     "/admin/gallery",
                      "/admin/track/{track_id}/undelete", "/admin/track/{track_id}/hold",
                      "/admin/track/{track_id}/vary", "/admin/track/{track_id}/download",
                      "/admin/tags", "/admin/tags/create", "/admin/tags/{tag_id}/rename", "/admin/tags/{tag_id}/delete",

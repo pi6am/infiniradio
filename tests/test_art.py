@@ -393,6 +393,16 @@ async def _main(cfg, tmp) -> None:
     assert payload["recent"][0].get("art", "absent") == "absent"  # current-only
     print("schedule payload: current track carries the current pick's links")
 
+    # ---- the gallery grid: current picks only, newest first -----------------
+    gallery = routes_admin._gallery_entries(db, cfg, 50)
+    ids = [g["track_id"] for g in gallery]
+    assert fresh in ids and t2 not in ids       # t2 has no stored art
+    entry = next(g for g in gallery if g["track_id"] == fresh)
+    assert entry["card"] == f"/art/{fresh}/{fresh_id}/512.jpg"
+    assert [g["art_id"] for g in gallery] == \
+        sorted((g["art_id"] for g in gallery), reverse=True)
+    print("gallery: current picks only, newest image first")
+
 
 def run() -> None:
     cfg, tmp = isolated_config()
