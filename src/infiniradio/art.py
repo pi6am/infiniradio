@@ -399,20 +399,27 @@ def _fail_job(db: DB, job_id: int, error: str) -> None:
 def track_context(db: DB, track: dict) -> dict[str, Any]:
     """Template context from a track row: everything an image-prompt writer
     could want. `track_tags` (not `tags` — the engine reserves that name
-    for the lyrics vocabulary, which art workflows don't use)."""
+    for the lyrics vocabulary, which art workflows don't use). Free-text
+    fields are stripped: stored style/lyrics carry trailing newlines that
+    would otherwise bleed blank lines into every template that embeds
+    them (fences especially)."""
     genre = ""
     if track["prompt_id"]:
         row = db.one("SELECT name FROM prompts WHERE id = ?", (track["prompt_id"],))
         genre = row["name"] if row else ""
     return {
-        "title": track["title"] or "",
-        "theme_title": track["theme_title"] or "",
-        "style": track["style_text"] or "",
-        "lyrics": track["lyrics_snapshot"] or "",
+        "title": (track["title"] or "").strip(),
+        "theme_title": (track["theme_title"] or "").strip(),
+        "style": (track["style_text"] or "").strip(),
+        "lyrics": (track["lyrics_snapshot"] or "").strip(),
+        # The placeholder [Intro]/[Instrumental]/[Outro] skeleton is NOT
+        # lyrics — templates gate on this (a useless fence for a skeleton
+        # reads as a formatting bug); the raw text stays in `lyrics`.
+        "has_lyrics": library.authored_lyrics(track["lyrics_snapshot"]) is not None,
         "track_tags": library.track_tags(db, track["id"]),
-        "genre": genre,
+        "genre": genre.strip(),
         "tempo": track["tempo"] or 0,
-        "music_key": track["music_key"] or "",
+        "music_key": (track["music_key"] or "").strip(),
         "duration_s": track["duration_s"] or 0.0,
         "is_variation": track["parent_track_id"] is not None,
     }
@@ -534,6 +541,7 @@ def _sample_context() -> dict[str, Any]:
                  "airy female vocals.",
         "lyrics": "[Verse]\nNeon rain on empty streets\n\n[Chorus]\nWe build "
                   "a glass cathedral in the dark",
+        "has_lyrics": True,
         "track_tags": ["synthwave", "vocal", "dreamy"],
         "genre": "synthwave nightdrive",
         "tempo": 92,

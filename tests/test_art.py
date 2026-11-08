@@ -196,6 +196,32 @@ async def _main(cfg, tmp) -> None:
     assert out3.startswith("Album art of") and len(out3) > 60, out3[:80]
     print("analysis workflow: single stage, Prompt:-anchored extraction ok")
 
+    # ---- template whitespace discipline ---------------------------------------
+    # trim_blocks eats the newline after every block tag: tags at the ENDS
+    # of content lines glue lines together (seen in prod). Art templates
+    # keep tags at line starts and fence multi-line values — assert both.
+    spec = wf["cover-illustrated"]
+    base = art.track_context(db, db.one("SELECT * FROM tracks WHERE id = ?", (t1,)))
+    txt = spec.env.get_template("concept.j2.md").render(
+        **{**dict(spec.vars), **base, "params": spec.params})
+    assert "\n- Music: " in txt and txt.count("- Title: ") == 1
+    assert "```\n[Verse]" in txt and "\n```" in txt      # lyrics fenced
+    assert "\n\nDescribe ONE cover" in txt               # separation kept
+    instrumental = dict(base, theme_title="", track_tags=[], genre="",
+                        tempo=0, music_key="", duration_s=0.0,
+                        lyrics="[Intro]\n\n[Instrumental]\n\n[Outro]",
+                        has_lyrics=False)
+    txt2 = spec.env.get_template("concept.j2.md").render(
+        **{**dict(spec.vars), **instrumental, "params": spec.params})
+    assert "- No lyrics — an instrumental track." in txt2
+    assert "- Lyrics:" not in txt2 and "```" not in txt2   # no skeleton fence
+    assert "- Theme:" not in txt2 and "- Tags:" not in txt2 and "- Tempo:" not in txt2
+    assert "\n- Music: " in txt2   # optional bullets gone without gluing
+    scene = wf["lyric-scene"].env.get_template("scene.j2.md").render(
+        **{**dict(wf["lyric-scene"].vars), **base, "params": {}})
+    assert "Lyrics:\n```\n[Verse]" in scene
+    print("templates: bullets on their own lines, lyrics fenced, no glue")
+
     # ---- links, history, current pick, delete -------------------------------
     links = routes_public.art_links(db, cfg, t1)
     assert links["card"].startswith(f"/art/{t1}/{first_art_id}/512.jpg")
