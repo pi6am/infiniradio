@@ -1,0 +1,25 @@
+name = "analysis-typographic"
+description = "Song analysis, then art with the title set in expressive typography"
+enabled = true
+weight = 1.0
+
+[requires]
+lyrics = true
+
+[[stage]]
+id = "analyze"
+template = "analyze.j2.md"
+max_attempts = 3
+feedback_template = "feedback.j2.md"
+[stage.gate]
+max_chars = 2200
+min_chars = 120
+[stage.extract]
+image_prompt = [
+  '(?s)Prompt:\s*```\s*\n(.*?)\n```',
+  '(?s)```\s*\n(.*?)\n```',
+  '(?s)Prompt:\s*(.+)',
+]
+
+[output]
+prompt = "image_prompt"

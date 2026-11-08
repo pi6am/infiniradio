@@ -48,7 +48,8 @@ async def _main(cfg, tmp) -> None:
 
     # ---- loading ----------------------------------------------------------
     wf = art.load_art_workflows(cfg)
-    assert set(wf) == {"cover", "cover-illustrated", "cover-photographic", "lyric-scene"}
+    assert set(wf) == {"cover", "cover-illustrated", "cover-photographic",
+                       "lyric-scene", "analysis-abstract", "analysis-typographic"}
     assert wf["cover"].abstract and not wf["cover-illustrated"].abstract
     # inheritance resolved: children carry the base's two stages
     assert [s.id for s in wf["cover-illustrated"].stages] == ["concept", "prompt"]
@@ -76,7 +77,9 @@ async def _main(cfg, tmp) -> None:
 
     # ---- weighted picks + requires filter -----------------------------------
     db.set_setting("art_workflow_weights", {"cover-illustrated": 0.0,
-                                            "cover-photographic": 0.0})
+                                            "cover-photographic": 0.0,
+                                            "analysis-abstract": 0.0,
+                                            "analysis-typographic": 0.0})
     db.set_setting("art_workflows_disabled", [])
     lyric_track = {"lyrics_snapshot": "[Verse]\nNeon rain on empty streets\n"}
     instr_track = {"lyrics_snapshot": "[Intro]\n\n[Instrumental]\n\n[Outro]"}
@@ -96,7 +99,8 @@ async def _main(cfg, tmp) -> None:
     assert art.effective_weight(db, rt.artworkflows["cover-illustrated"]) == 5.0
     db.set_setting("art_workflow_weights", {})
     # disabled via the admin list
-    db.set_setting("art_workflows_disabled", ["lyric-scene"])
+    db.set_setting("art_workflows_disabled", ["lyric-scene", "analysis-abstract",
+                                              "analysis-typographic"])
     assert {w.name for w in art.enabled_art_workflows(rt)} == \
         {"cover-illustrated", "cover-photographic"}
     db.set_setting("art_workflows_disabled", [])
@@ -135,14 +139,14 @@ async def _main(cfg, tmp) -> None:
     assert art.enqueue_art_job(rt, t2, workflow_id="nope") is None
     db.execute("UPDATE tracks SET status = 'ready' WHERE id = ?", (t1,))
     # the auto pick respects [requires]: an instrumental track never gets
-    # lyric-scene; an explicit admin pick bypasses the filter
+    # a lyrics-requiring workflow; an explicit admin pick bypasses the filter
     instr = _make_track(db, cfg, title="Instrumental",
                         lyrics="[Intro]\n\n[Instrumental]\n\n[Outro]")
     for _ in range(10):
         j = art.enqueue_art_job(rt, instr)
         assert j is not None and db.one(
             "SELECT workflow_id FROM generation_jobs WHERE id = ?", (j,)
-        )["workflow_id"] != "lyric-scene"
+        )["workflow_id"] in ("cover-illustrated", "cover-photographic")
         db.execute("DELETE FROM generation_jobs WHERE id = ?", (j,))
     forced = art.enqueue_art_job(rt, instr, workflow_id="lyric-scene")
     assert forced is not None   # explicit = the admin's call to make
@@ -178,6 +182,16 @@ async def _main(cfg, tmp) -> None:
     size1 = row["size_bytes"]
     assert size1 > 0
     print(f"art render: master + 2 jpeg thumbs stored, size_bytes={size1}, v1")
+
+    # the analysis workflows: single stage, Prompt:-anchored extraction
+    j3 = art.enqueue_art_job(rt, t2, workflow_id="analysis-abstract")
+    job3 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (j3,))
+    await art.run_art_phase(rt, job3)
+    job3 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (j3,))
+    assert job3["phase"] == "art_render" and job3["status"] == "queued"
+    out3 = json.loads(job3["progress"])["outputs"]["image_prompt"]
+    assert out3.startswith("Album art of") and len(out3) > 60, out3[:80]
+    print("analysis workflow: single stage, Prompt:-anchored extraction ok")
 
     # ---- links + versioning + regeneration ---------------------------------
     links = routes_public.art_links(cfg, t1, row["art_version"])
@@ -240,9 +254,11 @@ async def _main(cfg, tmp) -> None:
     assert first["id"] == music1 and second["id"] == art1, (first["id"], second["id"])
     third = dj._claim_gpu_job(rt, second["phase"])
     assert third["id"] == music1  # no more art queued -> music again
-    # master switch off: art jobs are unclaimable (they pause, not fail)
+    # the runtime switch gates only AUTOMATIC enqueueing; claims (and
+    # thus manual regen) ignore it — a manually queued song during a
+    # generation pause follows the same rule
     db.set_setting("art.enabled", False)
-    assert dj._claim_gpu_job(rt, "art_render")["id"] == music1
+    assert dj._claim_gpu_job(rt, "render")["id"] == art1
     db.set_setting("art.enabled", True)
     # a queue of art jobs never blocks music commissioning's budget
     art.enqueue_art_job(rt, _make_track(db, cfg, title="Fourth"))
@@ -284,6 +300,45 @@ async def _main(cfg, tmp) -> None:
     assert db.one("SELECT COUNT(*) AS n FROM generation_jobs")["n"] == 2
     print(f"auto-enqueue gated by enabled/new_tracks; backfill oldest-first "
           f"(track {oldest}), budgeted, failed tracks skipped not retried")
+
+    # ---- images client: model is optional ------------------------------------
+    from infiniradio.config import Config as _Config
+    from infiniradio.llm.images import ImagesClient
+    from pathlib import Path as _Path
+    base = {"art": {"api": {"base_url": "http://x/v1"}}}
+    c = ImagesClient(_Config(base, _Path(".")))
+    assert "model" not in c._payload("p", "1024x1024", 5)
+    full = {"art": {"api": {"base_url": "http://x/v1", "model": "sd",
+                            "send_seed": True}}}
+    assert ImagesClient(_Config(full, _Path(".")))._payload("p", "512x512", 7) == {
+        "prompt": "p", "size": "512x512", "n": 1,
+        "response_format": "b64_json", "model": "sd", "seed": 7}
+    print("images payload: model omitted when unset, sent (with seed) when set")
+
+    # the admin regen route refuses while the master switch is off — a
+    # queued art job is unclaimable then, which reads as a hang
+    from infiniradio.web import routes_admin
+    real_admin, real_csrf = routes_admin._is_admin, routes_admin._csrf_ok
+    routes_admin._is_admin = lambda r: True
+    routes_admin._csrf_ok = lambda r, c: True
+    fake = type("R", (), {"app": type("A", (), {})()})()
+    fake.app.state = type("S", (), {})()
+    fake.app.state.rt = rt
+    try:
+        # the switch is OFF: manual regen still queues and runs (the
+        # Generate-page rule); only automatic enqueueing is gated
+        db.set_setting("art.enabled", False)
+        ok = await routes_admin.track_art_regen(fake, t2, workflow="", csrf="")
+        assert ok.status_code == 303
+        j4 = db.one("SELECT * FROM generation_jobs ORDER BY id DESC LIMIT 1")
+        assert j4["kind"] == "art" and j4["track_id"] == t2
+        db.execute("DELETE FROM generation_jobs WHERE id = ?", (j4["id"],))
+        db.set_setting("art.enabled", True)
+        ok = await routes_admin.track_art_regen(fake, t2, workflow="", csrf="")
+        assert ok.status_code == 303
+    finally:
+        routes_admin._is_admin, routes_admin._csrf_ok = real_admin, real_csrf
+    print("regen route: manual queueing ignores the automatic-art switch")
 
     # ---- schedule payload carries art ---------------------------------------
     db.execute("DELETE FROM generation_jobs")

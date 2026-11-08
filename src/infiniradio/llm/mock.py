@@ -200,6 +200,21 @@ the puddles, distant traffic lights as warm bokeh, gentle film grain,
 wide centered composition with the figure small against the glowing city,
 cinematic night mood, no text or lettering
 ```"""),
+    # The two analysis workflows share their opening line; one needle
+    # serves both (they differ only in the no-text/typography clause).
+    ("Write a brief analysis of the song", """\
+The song holds distance and memory against each other: the narrator keeps
+a beloved place alive through small rituals, and the chorus turns that
+ritual into a promise. What pulls the song forward is the tension between
+holding on and letting go.
+
+Prompt:
+```
+Album art of drifting translucent panels layered over a hazy gradient of
+teal and violet, soft light bleeding between the layers, abstract and
+painterly texture, calm and spacious, square composition, no text, no
+people
+```"""),
     ("tags", "rock, pop, male vocal"),
 ]
 

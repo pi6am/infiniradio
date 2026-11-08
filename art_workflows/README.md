@@ -19,6 +19,9 @@ art_workflows/
   cover-illustrated/     # children: medium + weight via [params]/weight
   cover-photographic/
   lyric-scene/           # standalone single stage straight from the lyrics
+  analysis-abstract/     # single stage: song analysis -> textless abstract art
+  analysis-typographic/  # single stage: song analysis -> art with the title
+                         # set in expressive typography
 ```
 
 ## workflow.toml
@@ -95,11 +98,13 @@ Each job picks one enabled workflow in two steps: **filter** (`[requires]`
 instrumental tracks no matter its weight), then **weighted random** over
 the remainder (file `weight`, retunable live via the admin panel's weight
 column; an explicit admin regeneration names its workflow and skips both
-steps). `art.enabled` is the master switch; `art.new_tracks` auto-queues
-art for freshly ingested tracks; `art.backfill` trickles art for old
-tracks without any (a track whose art job failed once is left alone — use
-the track page's regenerate button). Art renders interleave with music
-renders on the GPU-side runner so neither starves.
+steps). `art.enabled` gates AUTOMATIC art only — new tracks and the
+backfill trickle; manual regeneration from a track page runs regardless,
+like the Generate page during a generation pause. `art.new_tracks`
+auto-queues art for freshly ingested tracks; `art.backfill` trickles art
+for old tracks without any (a track whose art job failed once is left
+alone — use the track page's regenerate button). Art renders interleave
+with music renders on the GPU-side runner so neither starves.
 
 ## Auditioning (no server)
 

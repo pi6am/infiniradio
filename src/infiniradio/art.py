@@ -274,14 +274,23 @@ def pick_art_workflow(rt, track: dict) -> ArtSpec | None:
     return random.choices(pool, weights=weights, k=1)[0]
 
 
-def pipeline_active(rt) -> bool:
-    """Art jobs may be enqueued/claimed: images backend + LLM + workflows
-    all configured, and the runtime master switch on. Off pauses queued
-    art jobs (the runners skip them) instead of failing them."""
+def pipeline_ready(rt) -> bool:
+    """The art pipeline is CONFIGURED: images backend, LLM (image-prompt
+    writing) and workflows all present. This is the runners' claim gate —
+    and it is deliberately independent of the runtime switches: a queued
+    art job runs whenever this holds, mirroring music, where pausing
+    generation never stops a manually queued song."""
     return (getattr(rt, "images", None) is not None
             and rt.llm is not None
-            and bool(getattr(rt, "artworkflows", {}))
-            and bool(runtime_get(rt.cfg, rt.db, "art.enabled")))
+            and bool(getattr(rt, "artworkflows", {})))
+
+
+def auto_generation_on(rt) -> bool:
+    """AUTOMATIC art (new tracks + backfill) may enqueue: the pipeline is
+    configured and the runtime switch is on. art.enabled governs only
+    these automatic paths — manual regeneration from a track page runs
+    regardless of it."""
+    return pipeline_ready(rt) and bool(runtime_get(rt.cfg, rt.db, "art.enabled"))
 
 
 # ------------------------------------------------------------------ jobs
@@ -328,7 +337,7 @@ def enqueue_art_job(rt, track_id: int, *, workflow_id: str | None = None,
 
 def maybe_enqueue_for_track(rt, track_id: int) -> None:
     """The art.new_tracks hook: art for a freshly ingested track."""
-    if not pipeline_active(rt):
+    if not auto_generation_on(rt):
         return
     if not runtime_get(rt.cfg, rt.db, "art.new_tracks"):
         return
@@ -343,7 +352,7 @@ def backfill_tick(rt) -> None:
     retried automatically (that would loop a broken workflow against the
     API forever) — its track page has the regenerate button.
     """
-    if not pipeline_active(rt):
+    if not auto_generation_on(rt):
         return
     if not runtime_get(rt.cfg, rt.db, "art.backfill"):
         return

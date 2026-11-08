@@ -125,7 +125,7 @@
     {% endif %}
   </form>
   {% if not art_ready %}
-  <p class="muted" style="margin:8px 0 0">art backend not configured — set [art.api] in config.toml</p>
+  <p class="muted" style="margin:8px 0 0">{{ art_note }}</p>
   {% endif %}
   {% endif %}
 </div>

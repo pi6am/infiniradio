@@ -51,7 +51,11 @@ class ImagesClient:
             raise ValueError("[art.api] base_url is empty — set art.api.base_url in config.toml")
         self.model = str(cfg.get("art.api.model", "") or "")
         if not self.model:
-            raise ValueError("[art.api] model is empty — set art.api.model in config.toml")
+            # Not fatal: proxies that front one image pipeline often ignore
+            # the model field entirely (the [llm] precedent). Endpoints that
+            # DO route by model will reject the request with a clear 4xx.
+            log.warning("[art.api] no model set — endpoints that require an "
+                        "explicit model name will reject requests")
         self.send_seed = bool(cfg.get("art.api.send_seed", False))
         self.transport_retries = max(0, int(cfg.get("art.api.transport_retries", 3)))
         headers = {"User-Agent": "infiniradio"}
@@ -71,23 +75,12 @@ class ImagesClient:
     async def generate(self, prompt: str, *, size: str = "1024x1024",
                        seed: int | None = None) -> bytes:
         """Raw image bytes (png/jpeg/webp — whatever the provider sent)."""
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "prompt": prompt,
-            "size": size,
-            "n": 1,
-            "response_format": "b64_json",
-        }
-        if self.send_seed and seed is not None:
-            # Not part of the OpenAI schema; useful for proxies that map it
-            # onto a ComfyUI seed. Off by default so strict providers never
-            # see an unknown field.
-            payload["seed"] = int(seed)
         attempts = self.transport_retries + 1
         for attempt in range(1, attempts + 1):
             retry_after: float | None = None
             try:
-                resp = await self._client.post("/images/generations", json=payload)
+                resp = await self._client.post("/images/generations",
+                                               json=self._payload(prompt, size, seed))
                 if resp.status_code in (408, 429) or resp.status_code >= 500:
                     if attempt < attempts:
                         if resp.status_code == 429:
@@ -105,6 +98,22 @@ class ImagesClient:
                     continue
                 raise ImagesError(f"cannot reach images API at {self.base_url}: {exc}") from exc
         raise ImagesError("unreachable")  # pragma: no cover
+
+    def _payload(self, prompt: str, size: str, seed: int | None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "size": size,
+            "n": 1,
+            "response_format": "b64_json",
+        }
+        if self.model:
+            payload["model"] = self.model
+        if self.send_seed and seed is not None:
+            # Not part of the OpenAI schema; useful for proxies that map it
+            # onto a ComfyUI seed. Off by default so strict providers never
+            # see an unknown field.
+            payload["seed"] = int(seed)
+        return payload
 
     async def _extract(self, data: dict[str, Any]) -> bytes:
         items = data.get("data") or []

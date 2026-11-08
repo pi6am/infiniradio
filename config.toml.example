@@ -140,7 +140,7 @@ thumb_quality = 90      # jpeg quality (2-100)
 # proxy in front of the same GPU that renders music.
 base_url = ""           # e.g. http://127.0.0.1:8000/v1
 api_key = ""
-model = ""
+model = ""              # optional — omit for proxies that front one pipeline
 # Forward the job's seed — only for proxies that map it onto a generator
 # seed; strict OpenAI-compatible servers reject unknown fields.
 send_seed = false

@@ -140,6 +140,16 @@ def run() -> None:
         app_api = create_app(cfg_api, mockaudio=True)
         assert app_api is not None
         print("6. [art.api] without [llm] -> art off, app starts")
+
+        # 7. [art.api] base_url only (no model): art still wires up — the
+        #    model name is optional for proxies that front one pipeline
+        cfg7 = _write_cfg(tmp, "art7.toml",
+                          extra='[llm]\nenabled = true\n'
+                                'base_url = "http://127.0.0.1:1/v1"\n'
+                                '[art.api]\nbase_url = "http://127.0.0.1:2/v1"\n',
+                          subdir="data7")
+        assert create_app(cfg7, mockaudio=True) is not None
+        print("7. [art.api] without model -> art on (model optional)")
         print("test_app: ALL PASSED")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

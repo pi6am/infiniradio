@@ -711,9 +711,10 @@ async def lyrics_runner(rt) -> None:
     """Serially process queued LLM jobs — music lyrics (phase='lyrics')
     and art image prompts (phase='art') — oldest first, one at a time.
 
-    Art jobs are claimable only while the art pipeline is active; a
-    paused pipeline leaves them queued (they resume when re-enabled)
-    without blocking the music lyrics behind them.
+    Art jobs are claimable whenever the art pipeline is configured; the
+    art.enabled runtime switch gates only automatic ENQUEUEING (new tracks
+    + backfill), so a manually queued job always runs — the Generate-page
+    rule music already follows.
     """
     log.info("lyrics runner started (llm: %s)", rt.llm.name if rt.llm else "off")
     while True:
@@ -723,7 +724,7 @@ async def lyrics_runner(rt) -> None:
                 "SELECT * FROM generation_jobs WHERE status = 'queued'"
                 " AND phase = 'lyrics' ORDER BY id LIMIT 1")
             art_job = None
-            if art.pipeline_active(rt):
+            if art.pipeline_ready(rt):
                 art_job = db.one(
                     "SELECT * FROM generation_jobs WHERE status = 'queued'"
                     " AND phase = 'art' ORDER BY id LIMIT 1")
@@ -749,15 +750,16 @@ def _claim_gpu_job(rt, last_phase: str) -> dict | None:
     """The next GPU-side job: a queued music render or a queued art
     render — ALTERNATING when both are non-empty (the images endpoint
     typically proxies the same GPU that renders music, so neither queue
-    may starve the other). Art jobs are not claimable while the art
-    pipeline is paused; they wait, they don't fail."""
+    may starve the other). Art renders are claimable whenever the art
+    pipeline is configured; the art.enabled switch never blocks a job
+    that is already queued (manual regen works like the Generate page)."""
     render = None
     if rt.generator is not None:   # without a music backend, music render
         render = rt.db.one(        # jobs wait (as before), never insta-fail
             "SELECT * FROM generation_jobs WHERE status = 'queued' AND phase = 'render'"
             " ORDER BY id LIMIT 1")
     art_render = None
-    if art.pipeline_active(rt) and getattr(rt, "images", None) is not None:
+    if art.pipeline_ready(rt):
         art_render = rt.db.one(
             "SELECT * FROM generation_jobs WHERE status = 'queued'"
             " AND phase = 'art_render' ORDER BY id LIMIT 1")

@@ -213,8 +213,7 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
             from .lyrics import load_workflows
             workflows = load_workflows(cfg)
         artworkflows = {}
-        images_on = mockart or (bool(str(cfg.get("art.api.base_url", "") or "").strip())
-                                and bool(str(cfg.get("art.api.model", "") or "").strip()))
+        images_on = mockart or bool(str(cfg.get("art.api.base_url", "") or "").strip())
         if images_on and llm_backend == "off":
             # Art needs the LLM to write image prompts; the endpoint alone
             # is not enough. Warn (not fatal): music runs fine without art.

@@ -34,12 +34,12 @@ class LLMConfigError(RuntimeError):
 def make_images_client(cfg: Config, mockart: bool = False):
     """Images backend for track art, or None when unconfigured. The mock
     is reachable only through --mockart (the --mockaudio/--mockllm rule:
-    testing clients never leak into a config-selected backend)."""
+    testing clients never leak into a config-selected backend). A model
+    name is optional — base_url alone wires the client up (the [llm]
+    precedent: proxies fronting one pipeline often ignore the field)."""
     if mockart:
         return MockImagesClient()
     if not str(cfg.get("art.api.base_url", "") or "").strip():
-        return None
-    if not str(cfg.get("art.api.model", "") or "").strip():
         return None
     return ImagesClient(cfg)
 

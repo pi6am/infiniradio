@@ -558,6 +558,15 @@ async def track_page(request: Request, track_id: int):
                      " ORDER BY id DESC LIMIT 1", (track_id,))
     art_job = db.one("SELECT id, status FROM generation_jobs WHERE kind = 'art'"
                      " AND track_id = ? ORDER BY id DESC LIMIT 1", (track_id,))
+    art_ready = art.pipeline_ready(rt)
+    if art_ready:
+        art_note = None
+    elif getattr(rt, "images", None) is None:
+        art_note = "images endpoint not configured ([art.api] base_url in config.toml; needs a restart)"
+    elif not getattr(rt, "artworkflows", {}):
+        art_note = "no art workflows loaded (art.workflows_dir)"
+    else:
+        art_note = "art needs the LLM ([llm] enabled)"
     return request.app.state.templates.TemplateResponse(
         request, "admin/track.html",
         _ctx(request, t=track, parent=parent,
@@ -566,8 +575,7 @@ async def track_page(request: Request, track_id: int):
              art=art_links(rt.cfg, track_id, row["art_version"] or 0),
              art_job=art_job,
              art_workflows=art.enabled_art_workflows(rt),
-             art_ready=(getattr(rt, "images", None) is not None
-                        and bool(getattr(rt, "artworkflows", {})))))
+             art_ready=art_ready, art_note=art_note))
 
 
 @router.get("/track/{track_id}/audio")
@@ -637,8 +645,9 @@ async def track_art_regen(request: Request, track_id: int,
                           workflow: str = Form(""), csrf: str = Form("")):
     """Queue an art (re)generation for one track — the dev/production
     iteration loop. Empty workflow = the weighted pick; an explicit name
-    forces that workflow. Works while the art master switch is off (the
-    job waits for it), but not without the images backend."""
+    forces that workflow. Runs regardless of the art.enabled switch: like
+    the Generate page for music, manual queueing is never blocked by the
+    automatic-generation settings."""
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
