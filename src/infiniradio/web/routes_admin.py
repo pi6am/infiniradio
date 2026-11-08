@@ -1486,7 +1486,17 @@ async def tags_delete(request: Request, tag_id: int, csrf: str = Form("")):
 
 # ------------------------------------------------------------------ gallery
 
-def _gallery_entries(db, cfg, limit: int) -> list[dict]:
+GALLERY_DEFAULT_N = 100
+
+
+def _gallery_query(page: int, n: int) -> str:
+    params: dict[str, object] = {"page": page}
+    if n != GALLERY_DEFAULT_N:
+        params["n"] = n
+    return "/admin/gallery?" + urlencode(params)
+
+
+def _gallery_entries(db, cfg, limit: int, offset: int = 0) -> list[dict]:
     """The review grid's data: every track's CURRENT art, newest image
     first. Only tracks with a live pick (and files on disk) appear — the
     point is reviewing what listeners see, not the per-track history
@@ -1496,7 +1506,7 @@ def _gallery_entries(db, cfg, limit: int) -> list[dict]:
         " ta.workflow_id, ta.created_at AS art_at"
         " FROM tracks t JOIN track_art ta ON ta.id = t.art_id"
         " WHERE t.status != 'deleted'"
-        " ORDER BY ta.id DESC LIMIT ?", (limit,))
+        " ORDER BY ta.id DESC LIMIT ? OFFSET ?", (limit, offset))
     out = []
     for r in rows:
         links = art_links_for(cfg, r["track_id"], r["art_id"])
@@ -1507,7 +1517,8 @@ def _gallery_entries(db, cfg, limit: int) -> list[dict]:
 
 
 @router.get("/gallery", response_class=HTMLResponse)
-async def gallery_page(request: Request, n: int = 100):
+async def gallery_page(request: Request, n: int = GALLERY_DEFAULT_N,
+                       page: int = 1):
     if not _is_admin(request):
         return _login_redirect()
     rt = request.app.state.rt
@@ -1515,6 +1526,14 @@ async def gallery_page(request: Request, n: int = 100):
     total = rt.db.one(
         "SELECT COUNT(*) AS n FROM tracks t JOIN track_art ta ON ta.id = t.art_id"
         " WHERE t.status != 'deleted'")["n"]
+    max_page = max(1, (total + n - 1) // n)
+    page = max(1, min(page, max_page))
+
+    def nav(target: int) -> str | None:
+        if not (1 <= target <= max_page) or target == page:
+            return None
+        return _gallery_query(target, n)
+
     # Backfill status — the trickle is silent while held by the music
     # generation pause or the quota, so say so where art gets reviewed.
     backfill_note = None
@@ -1528,8 +1547,11 @@ async def gallery_page(request: Request, n: int = 100):
                 backfill_note += f" · held ({reason})"
     return request.app.state.templates.TemplateResponse(
         request, "admin/gallery.html",
-        _ctx(request, entries=_gallery_entries(rt.db, rt.cfg, n),
-             n=n, total=total, backfill_note=backfill_note))
+        _ctx(request, entries=_gallery_entries(rt.db, rt.cfg, n, (page - 1) * n),
+             n=n, total=total, backfill_note=backfill_note,
+             pager={"page": page, "max_page": max_page, "total": total,
+                    "first": nav(1), "prev": nav(page - 1),
+                    "next": nav(page + 1), "last": nav(max_page)}))
 
 
 # ------------------------------------------------------------------ jobs

@@ -496,6 +496,24 @@ async def _main(cfg, tmp) -> None:
     print(f"reroll: same prompt + fresh seed -> new image #{row['art_id']}, "
           f"history and old files untouched")
 
+    # ---- gallery pagination (first/prev/next/last + page indicator) ----------
+    pool = [t2, instr] + [_make_track(db, cfg, title=f"Pageable {i}") for i in range(9)]
+    for tid in pool:
+        await library.store_art(db, cfg, tid, MOCK_PNG, seed=1,
+                                workflow_id="cover", prompt="paged")
+    # fresh + the 11 above = 12 current picks -> two pages at n=10
+    page1 = (await routes_admin.gallery_page(fake, n=10)).body.decode()
+    assert "page 1 / 2" in page1 and page1.count('<img src="/art/') == 10
+    assert 'href="/admin/gallery?page=2&amp;n=10"' in page1    # next/last carry n
+    assert 'href="/admin/gallery?page=1' not in page1          # at the first page
+    page2 = (await routes_admin.gallery_page(fake, n=10, page=2)).body.decode()
+    assert "page 2 / 2" in page2 and page2.count('<img src="/art/') == 2
+    assert 'href="/admin/gallery?page=1&amp;n=10"' in page2    # first/prev enabled
+    assert 'href="/admin/gallery?page=2&amp;n=10"' not in page2
+    clamped = (await routes_admin.gallery_page(fake, n=10, page=99)).body.decode()
+    assert "page 2 / 2" in clamped                             # over-range clamps
+    print("gallery pager: first/prev/next/last + page indicator, page clamp ok")
+
 
 def run() -> None:
     cfg, tmp = isolated_config()

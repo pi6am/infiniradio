@@ -5,8 +5,7 @@
 <div class="card">
   <h2 style="margin-top:0">art gallery</h2>
   <p class="muted" style="margin-top:0">{{ total }} track(s) with art ·
-    current picks, newest first{% if total > entries | length %} ·
-    showing {{ entries | length }}{% endif %}</p>
+    current picks, newest first</p>
   {% if backfill_note %}<p class="muted" style="margin-top:0">{{ backfill_note }}</p>{% endif %}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px">
     {% for e in entries %}
@@ -20,5 +19,17 @@
     {% endfor %}
   </div>
   {% if not entries %}<p class="muted">no tracks with art yet</p>{% endif %}
+  <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:10px">
+    {% if pager.first %}<a class="btn" href="{{ pager.first }}">« first</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">« first</span>{% endif %}
+    {% if pager.prev %}<a class="btn" href="{{ pager.prev }}">‹ prev</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">‹ prev</span>{% endif %}
+    <span class="muted">page {{ pager.page }} / {{ pager.max_page }} · {{ pager.total }}
+      track{{ '' if pager.total == 1 else 's' }}</span>
+    {% if pager.next %}<a class="btn" href="{{ pager.next }}">next ›</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">next ›</span>{% endif %}
+    {% if pager.last %}<a class="btn" href="{{ pager.last }}">last »</a>{% else %}
+    <span class="btn" style="opacity:.4;cursor:default">last »</span>{% endif %}
+  </div>
 </div>
 {% endblock %}
