@@ -712,8 +712,9 @@ async def lyrics_runner(rt) -> None:
     and art image prompts (phase='art') — oldest first, one at a time.
 
     Art jobs are claimable whenever the art pipeline is configured; the
-    art.enabled runtime switch gates only automatic ENQUEUEING (new tracks
-    + backfill), so a manually queued job always runs — the Generate-page
+    per-path runtime switches (art.new_tracks / art.backfill) gate only
+    automatic ENQUEUEING, and the dashboard's generation pause holds the
+    backfill — so a manually queued job always runs, the Generate-page
     rule music already follows.
     """
     log.info("lyrics runner started (llm: %s)", rt.llm.name if rt.llm else "off")
@@ -751,8 +752,8 @@ def _claim_gpu_job(rt, last_phase: str) -> dict | None:
     render — ALTERNATING when both are non-empty (the images endpoint
     typically proxies the same GPU that renders music, so neither queue
     may starve the other). Art renders are claimable whenever the art
-    pipeline is configured; the art.enabled switch never blocks a job
-    that is already queued (manual regen works like the Generate page)."""
+    pipeline is configured; no runtime switch blocks a job that is
+    already queued (manual regen works like the Generate page)."""
     render = None
     if rt.generator is not None:   # without a music backend, music render
         render = rt.db.one(        # jobs wait (as before), never insta-fail

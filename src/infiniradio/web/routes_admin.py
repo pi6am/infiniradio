@@ -653,9 +653,9 @@ async def track_art_regen(request: Request, track_id: int,
                           workflow: str = Form(""), csrf: str = Form("")):
     """Queue an art (re)generation for one track — the dev/production
     iteration loop. Empty workflow = the weighted pick; an explicit name
-    forces that workflow. Runs regardless of the art.enabled switch: like
-    the Generate page for music, manual queueing is never blocked by the
-    automatic-generation settings."""
+    forces that workflow. Never blocked by runtime switches: like the
+    Generate page for music, manual queueing waits for nothing but the
+    pipeline being configured."""
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
@@ -1494,10 +1494,21 @@ async def gallery_page(request: Request, n: int = 100):
     total = rt.db.one(
         "SELECT COUNT(*) AS n FROM tracks t JOIN track_art ta ON ta.id = t.art_id"
         " WHERE t.status != 'deleted'")["n"]
+    # Backfill status — the trickle is silent while held by the music
+    # generation pause or the quota, so say so where art gets reviewed.
+    backfill_note = None
+    if bool(runtime_get(rt.cfg, rt.db, "art.backfill")):
+        if not art.pipeline_ready(rt):
+            backfill_note = "backfill on, but the art pipeline is not configured"
+        else:
+            backfill_note = f"backfill on · {art.backfill_waiting(rt.db)} track(s) waiting"
+            paused, reason = janitor.generation_paused(rt.db, rt.cfg)
+            if paused:
+                backfill_note += f" · held ({reason})"
     return request.app.state.templates.TemplateResponse(
         request, "admin/gallery.html",
         _ctx(request, entries=_gallery_entries(rt.db, rt.cfg, n),
-             n=n, total=total))
+             n=n, total=total, backfill_note=backfill_note))
 
 
 # ------------------------------------------------------------------ jobs

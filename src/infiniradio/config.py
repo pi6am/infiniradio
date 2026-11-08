@@ -265,15 +265,13 @@ RUNTIME_SETTINGS: dict[str, tuple[Any, Callable[[str], Any], str, str]] = {
                                       "Condemned tracks keep their audio (counting toward quota, never aired) "
                                       "for this long before real deletion — review time against downvote waves. "
                                       "Admin can restore while trashed. 0 = delete immediately"),
-    "art.enabled": (False, _parse_bool, "Automatic art generation",
-                    "Queue art automatically: for freshly ingested tracks and via the "
-                    "backfill trickle. Manual regeneration on a track page runs regardless"),
     "art.new_tracks": (True, _parse_bool, "Art for new tracks",
                        "Queue an art job for each freshly generated track"),
     "art.backfill": (False, _parse_bool, "Art backfill",
                      "Trickle art jobs for old tracks that have none (oldest first; a track "
                      "whose art job already failed once is skipped — regenerate it from its "
-                     "track page instead)"),
+                     "track page instead). Waits while music generation is paused or the "
+                     "disk quota is hit, like all automatic commissioning"),
     "art.backfill_max_queued": (1, int, "Art backfill queue",
                                 "At most this many backfill art jobs waiting at once"),
 }

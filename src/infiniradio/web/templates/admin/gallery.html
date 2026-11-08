@@ -7,6 +7,7 @@
   <p class="muted" style="margin-top:0">{{ total }} track(s) with art ·
     current picks, newest first{% if total > entries | length %} ·
     showing {{ entries | length }}{% endif %}</p>
+  {% if backfill_note %}<p class="muted" style="margin-top:0">{{ backfill_note }}</p>{% endif %}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px">
     {% for e in entries %}
     <a href="/admin/track/{{ e.track_id }}" style="text-decoration:none;color:inherit">

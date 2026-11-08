@@ -39,7 +39,6 @@ def _mkrt(cfg, db, llm=None):
     rt = RT(cfg, db, None, llm or MockLLMClient(), {})
     rt.images = MockImagesClient()
     rt.artworkflows = art.load_art_workflows(cfg)
-    db.set_setting("art.enabled", True)
     return rt
 
 
@@ -294,28 +293,28 @@ async def _main(cfg, tmp) -> None:
     assert first["id"] == music1 and second["id"] == art1, (first["id"], second["id"])
     third = dj._claim_gpu_job(rt, second["phase"])
     assert third["id"] == music1  # no more art queued -> music again
-    # the runtime switch gates only AUTOMATIC enqueueing; claims (and
-    # thus manual regen) ignore it — a manually queued song during a
-    # generation pause follows the same rule
-    db.set_setting("art.enabled", False)
-    assert dj._claim_gpu_job(rt, "render")["id"] == art1
-    db.set_setting("art.enabled", True)
+    # claims are gated by CONFIGURATION only (pipeline_ready): with the
+    # images backend gone, art jobs wait — no runtime switch ever blocks
+    # an already-queued job
+    rt.images = None
+    assert dj._claim_gpu_job(rt, "render")["id"] == music1
+    rt.images = MockImagesClient()
     # a queue of art jobs never blocks music commissioning's budget
     art.enqueue_art_job(rt, _make_track(db, cfg, title="Fourth"))
     art.enqueue_art_job(rt, _make_track(db, cfg, title="Fifth"))
     queued_music = db.one("SELECT COUNT(*) AS n FROM generation_jobs"
                           " WHERE status = 'queued' AND kind = 'music'")["n"]
     assert queued_music == 1
-    print("GPU claims alternate (music first), art pauses when disabled, "
+    print("GPU claims alternate (music first), unconfigured art waits, "
           "music budget counts only music jobs")
 
     # ---- auto-enqueue for new tracks + backfill -----------------------------
     db.execute("DELETE FROM generation_jobs")
-    db.set_setting("art.enabled", False)
-    fresh = _make_track(db, cfg, title="Fresh")
+    rt.images = None                   # pipeline not configured: nothing
+    fresh = _make_track(db, cfg, title="Fresh")   # automatic ever enqueues
     art.maybe_enqueue_for_track(rt, fresh)
     assert db.one("SELECT COUNT(*) AS n FROM generation_jobs")["n"] == 0
-    db.set_setting("art.enabled", True)
+    rt.images = MockImagesClient()
     db.set_setting("art.new_tracks", False)
     art.maybe_enqueue_for_track(rt, fresh)
     assert db.one("SELECT COUNT(*) AS n FROM generation_jobs")["n"] == 0
@@ -365,20 +364,21 @@ async def _main(cfg, tmp) -> None:
     fake.app.state = type("S", (), {})()
     fake.app.state.rt = rt
     try:
-        # the switch is OFF: manual regen still queues and runs (the
-        # Generate-page rule); only automatic enqueueing is gated
-        db.set_setting("art.enabled", False)
+        # manual regen queues whenever the pipeline is configured — no
+        # runtime switch (the Generate-page rule)
         ok = await routes_admin.track_art_regen(fake, t2, workflow="", csrf="")
         assert ok.status_code == 303
         j4 = db.one("SELECT * FROM generation_jobs ORDER BY id DESC LIMIT 1")
         assert j4["kind"] == "art" and j4["track_id"] == t2
         db.execute("DELETE FROM generation_jobs WHERE id = ?", (j4["id"],))
-        db.set_setting("art.enabled", True)
+        db.set_setting("generation_paused", True)   # the pause never blocks
         ok = await routes_admin.track_art_regen(fake, t2, workflow="", csrf="")
         assert ok.status_code == 303
+        db.execute("DELETE FROM generation_jobs")   # the manual job
+        db.set_setting("generation_paused", False)
     finally:
         routes_admin._is_admin, routes_admin._csrf_ok = real_admin, real_csrf
-    print("regen route: manual queueing ignores the automatic-art switch")
+    print("regen route: manual queueing waits for no runtime switch or pause")
 
     # ---- schedule payload carries art ---------------------------------------
     db.execute("DELETE FROM generation_jobs")
@@ -402,6 +402,26 @@ async def _main(cfg, tmp) -> None:
     assert [g["art_id"] for g in gallery] == \
         sorted((g["art_id"] for g in gallery), reverse=True)
     print("gallery: current picks only, newest image first")
+
+    # the gallery page renders, including the backfill status line (the
+    # trickle is held silently by the generation pause otherwise)
+    class _Sess:
+        def validate(self, c): return True
+        def csrf_token(self, c): return "x"
+    fake.app.state.sessions = _Sess()
+    from infiniradio.app import WEB_DIR
+    from fastapi.templating import Jinja2Templates
+    fake.app.state.templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+    fake.cookies = {}
+    fake.url = type("U", (), {"path": "/admin/gallery"})()
+    resp = await routes_admin.gallery_page(fake)
+    html = resp.body.decode()
+    assert "backfill on ·" in html and "waiting" in html
+    db.set_setting("generation_paused", True)
+    held = (await routes_admin.gallery_page(fake)).body.decode()
+    assert "held (paused from the admin panel)" in held
+    db.set_setting("generation_paused", False)
+    print("gallery page: backfill status line shown, held reason when paused")
 
 
 def run() -> None:

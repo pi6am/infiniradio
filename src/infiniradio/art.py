@@ -18,10 +18,12 @@ Jobs are kind='art' rows in generation_jobs:
                      typical endpoint proxies the same GPU that makes
                      music, so neither queue may starve the other)
 
-Everything tunable at runtime lives in the settings table (art.enabled /
-art.new_tracks / art.backfill / art.backfill_max_queued, plus the
-art_workflow_weights override map and the art_workflows_disabled list —
-see the admin prompts page).
+Everything tunable at runtime lives in the settings table (art.new_tracks /
+art.backfill / art.backfill_max_queued, plus the art_workflow_weights
+override map and the art_workflows_disabled list — see the admin prompts
+page). The dashboard's generation pause is THE pause for automatic art
+(backfill waits with all automatic commissioning); manual regeneration
+never waits.
 
 Audition (repo root, no server):
 
@@ -285,14 +287,6 @@ def pipeline_ready(rt) -> bool:
             and bool(getattr(rt, "artworkflows", {})))
 
 
-def auto_generation_on(rt) -> bool:
-    """AUTOMATIC art (new tracks + backfill) may enqueue: the pipeline is
-    configured and the runtime switch is on. art.enabled governs only
-    these automatic paths — manual regeneration from a track page runs
-    regardless of it."""
-    return pipeline_ready(rt) and bool(runtime_get(rt.cfg, rt.db, "art.enabled"))
-
-
 # ------------------------------------------------------------------ jobs
 
 def enqueue_art_job(rt, track_id: int, *, workflow_id: str | None = None,
@@ -336,12 +330,23 @@ def enqueue_art_job(rt, track_id: int, *, workflow_id: str | None = None,
 
 
 def maybe_enqueue_for_track(rt, track_id: int) -> None:
-    """The art.new_tracks hook: art for a freshly ingested track."""
-    if not auto_generation_on(rt):
+    """The art.new_tracks hook: art for a freshly ingested track (gated by
+    the pipeline being configured and the runtime switch)."""
+    if not pipeline_ready(rt):
         return
     if not runtime_get(rt.cfg, rt.db, "art.new_tracks"):
         return
     enqueue_art_job(rt, track_id)
+
+
+_BACKFILL_WHERE = (" FROM tracks t WHERE t.status = 'ready' AND t.art_id IS NULL"
+                   " AND NOT EXISTS (SELECT 1 FROM generation_jobs j"
+                   "                 WHERE j.kind = 'art' AND j.track_id = t.id)")
+
+
+def backfill_waiting(db: DB) -> int:
+    """Ready tracks eligible for the backfill trickle right now."""
+    return db.one("SELECT COUNT(*) AS n" + _BACKFILL_WHERE)["n"]
 
 
 def backfill_tick(rt) -> None:
@@ -351,8 +356,12 @@ def backfill_tick(rt) -> None:
     "Never had one" is deliberate: a track whose art job FAILED is not
     retried automatically (that would loop a broken workflow against the
     API forever) — its track page has the regenerate button.
+
+    Honors the music generation pause and the disk quota (the same gate
+    as automatic music commissioning): automatic art waits with it, while
+    manual regeneration never does.
     """
-    if not auto_generation_on(rt):
+    if not pipeline_ready(rt):
         return
     if not runtime_get(rt.cfg, rt.db, "art.backfill"):
         return
@@ -365,12 +374,7 @@ def backfill_tick(rt) -> None:
         " AND status IN ('queued', 'running')")["n"]
     if active >= budget:
         return
-    row = rt.db.one(
-        "SELECT t.id FROM tracks t"
-        " WHERE t.status = 'ready' AND t.art_id IS NULL"
-        " AND NOT EXISTS (SELECT 1 FROM generation_jobs j"
-        "                 WHERE j.kind = 'art' AND j.track_id = t.id)"
-        " ORDER BY t.id LIMIT 1")
+    row = rt.db.one("SELECT t.id" + _BACKFILL_WHERE + " ORDER BY t.id LIMIT 1")
     if row:
         enqueue_art_job(rt, row["id"])
 
