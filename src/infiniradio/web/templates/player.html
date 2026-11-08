@@ -336,7 +336,10 @@
       artwork = [];
       if (t.art.icon_px) artwork.push(one(t.art.icon, t.art.icon_px));
       if (t.art.card_px) artwork.push(one(t.art.card, t.art.card_px));
-      artwork.push(one(t.art.master, null));
+      // every entry carries sizes, matching the shape that reliably
+      // renders in OS media UIs; the sizes-less ~2MB master PNG is
+      // deliberately excluded (it belongs to the lightbox, not the
+      // notification/car display).
       artwork.push({ src: '/static/android-chrome-512x512.png', sizes: '512x512',
                      type: 'image/png' });
     }
