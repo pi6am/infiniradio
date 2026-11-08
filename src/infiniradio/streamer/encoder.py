@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import Config
@@ -43,6 +44,12 @@ class Encoder:
         self.total_bytes = 0                    # PCM bytes written this life
         self.epoch = 0
         self.started_wall = None                # utcnow() at process start
+        # Wall clock ffmpeg anchors EXT-X-PROGRAM-DATE-TIME to: ffmpeg stamps
+        # the tag from the wall time the FIRST data reaches it (not process
+        # spawn) and then advances it by media time — so the PDT timeline
+        # clients see starts here, not at started_wall. Until the first
+        # write, started_wall is the best estimate.
+        self.pdt_origin = None
         self._stderr_task: asyncio.Task | None = None
 
     @property
@@ -78,7 +85,6 @@ class Encoder:
         # segment numbering and the init filename).
         self.epoch = self._next_epoch()
         self._purge_stale()
-        from datetime import datetime, timezone
         self.proc = await asyncio.create_subprocess_exec(
             *self._args(),
             stdin=asyncio.subprocess.PIPE,
@@ -88,6 +94,7 @@ class Encoder:
         self.started_at = time.monotonic()
         self.total_bytes = 0
         self.started_wall = datetime.now(timezone.utc).replace(tzinfo=None)
+        self.pdt_origin = self.started_wall
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         log.info("HLS encoder started (pid %s, epoch %d)", self.proc.pid, self.epoch)
 
@@ -133,7 +140,7 @@ class Encoder:
 
     def program_seconds(self) -> float:
         """Seconds of program written this encoder life (== the HLS timeline,
-        since EXT-X-PROGRAM-DATE-TIME = started_wall + program position)."""
+        since EXT-X-PROGRAM-DATE-TIME = pdt_origin + program position)."""
         return self.total_bytes / self.bytes_per_second
 
     async def _drain_stderr(self) -> None:
@@ -152,6 +159,11 @@ class Encoder:
             await self.proc.stdin.drain()
         except (BrokenPipeError, ConnectionResetError) as exc:
             raise EncoderDied(str(exc)) from exc
+        if self.total_bytes == 0:
+            # The muxer captures its PDT wall-clock anchor when this first
+            # chunk reaches it — mirror that so the play_log offsets the
+            # schedule hands out land exactly on the tags clients play by.
+            self.pdt_origin = datetime.now(timezone.utc).replace(tzinfo=None)
         self.total_bytes += len(pcm)
 
     def queued_seconds(self) -> float:

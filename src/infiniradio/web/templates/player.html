@@ -419,7 +419,12 @@
       .finally(function () { pendingVotes.delete(t.id); render(); });
   }
 
-  // ---- schedule: one fetch per song change ----------------------------------
+  // ---- schedule: card swaps locally at the PDT boundary ----------------------
+  // The payload carries the upcoming airing (the feeder writes ahead of the
+  // live edge), so the On Air card switches to the next track locally at
+  // start_pdt_ms — exact, and with no round trip on the song change itself.
+  // One fetch per song then reconciles votes/art/lyrics and delivers the
+  // next upcoming entry.
   // The current track also appears in the recent list; canonicalize entries
   // by track id so every rendering of a track shares ONE object — votes and
   // tallies then update all of its buttons at once.
@@ -431,6 +436,7 @@
       return t;
     }
     if (s.current) s.current = canon(s.current);
+    if (s.upcoming) s.upcoming = canon(s.upcoming);
     s.recent = (s.recent || []).map(canon);
     return s;
   }
@@ -443,13 +449,42 @@
       .catch(function () { armBoundary(); });
   }
 
+  // Promote the pre-filled upcoming entry to the On Air card right now; the
+  // fetch that follows only reconciles (votes, art, lyrics) and picks up the
+  // upcoming entry for the NEXT boundary.
+  function swapUpcoming() {
+    const up = sched && sched.upcoming;
+    if (!up || playingPdt() == null) { fetchSchedule(); return; }  // stale or anchor lost
+    sched.current = up;
+    sched.upcoming = null;
+    render();
+    fetchSchedule();
+  }
+
   function armBoundary() {
     clearTimeout(boundaryTimer);
     const t = sched && sched.current;
+    const up = sched && sched.upcoming;
+    const pdt = playingPdt();
+    if (pdt != null && up && up.start_pdt_ms != null) {
+      // Pre-filled: swap the card exactly at the boundary — no round trip.
+      boundaryTimer = setTimeout(swapUpcoming, Math.max(0, up.start_pdt_ms - pdt));
+      return;
+    }
     let wait = 30000;                       // no timeline info -> slow poll
     if (t && t.end_pdt_ms != null) {
-      const now = playingPdt() != null ? playingPdt() : Date.now();
-      wait = Math.max(2000, t.end_pdt_ms - now + 1500);  // just past the boundary
+      if (pdt != null && !up) {
+        // Timeline known but the next airing isn't logged yet — the feeder
+        // starts writing it roughly one live-latency before the boundary
+        // reaches us. Look once comfortably before the end, then lightly
+        // retry until the entry appears.
+        const until = t.end_pdt_ms - pdt;
+        wait = until > 30000 ? until - 30000
+             : Math.min(5000, Math.max(500, until));
+      } else {
+        const now = pdt != null ? pdt : Date.now();
+        wait = Math.max(2000, t.end_pdt_ms - now);   // boundary fetch (fallback path)
+      }
     }
     boundaryTimer = setTimeout(fetchSchedule, wait);
   }

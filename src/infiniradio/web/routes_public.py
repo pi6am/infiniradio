@@ -1,10 +1,12 @@
 """Public site: player page (JSON schedule + client-side rendering),
 voting API, and HLS file serving.
 
-The player polls /api/schedule once per song change (computed locally from
-the PDT timeline boundaries in the response) and updates the DOM itself;
-vote clicks are optimistic and reconciled via /api/vote. No server-rendered
-fragments are swapped into the page.
+The player swaps the On Air card to the next track locally at the PDT
+boundary from /api/schedule (the payload carries the upcoming airing the
+feeder has already written), then fetches once per song change to
+reconcile votes/lyrics and receive the next upcoming entry; vote clicks
+are optimistic and reconciled via /api/vote. No server-rendered fragments
+are swapped into the page.
 """
 
 from __future__ import annotations
@@ -137,11 +139,11 @@ def _schedule_rows(db: DB, cfg, listener_id: str, at_ms: float | None,
     """
     mode, prog_at = "clock", None
     if (at_ms is not None and encoder is not None
-            and getattr(encoder, "started_wall", None) is not None):
+            and getattr(encoder, "pdt_origin", None) is not None):
         try:
-            # started_wall is naive UTC; timestamp() would read it as local
+            # pdt_origin is naive UTC; timestamp() would read it as local
             # time, so attach UTC explicitly before converting to epoch.
-            start_epoch = encoder.started_wall.replace(tzinfo=timezone.utc).timestamp()
+            start_epoch = encoder.pdt_origin.replace(tzinfo=timezone.utc).timestamp()
             prog_at = at_ms / 1000.0 - start_epoch
             if abs(prog_at - encoder.program_seconds()) < 6 * 3600:
                 mode = "program"
@@ -171,6 +173,23 @@ def _schedule_rows(db: DB, cfg, listener_id: str, at_ms: float | None,
             (iso(utcnow()),),
         )
     return mode, prog_at, rows
+
+
+def _next_airing(db: DB, encoder, prog_at: float) -> dict | None:
+    """The first airing queued beyond the listener's position — the one the
+    card will show next. The feeder decodes and writes ahead of the live
+    edge (up to its lead budget), so this row usually exists well before
+    any listener reaches the boundary; the player pre-fills its card from
+    it and swaps locally at start_pdt_ms instead of polling past it."""
+    return db.one(
+        "SELECT p.started_at AS airtime, p.prog_offset AS prog_offset,"
+        " p.played_s AS played_s, t.*"
+        " FROM play_log p JOIN tracks t ON t.id = p.track_id"
+        " WHERE p.epoch = ? AND p.prog_offset IS NOT NULL"
+        " AND p.prog_offset > ? AND t.status != 'deleted'"
+        " ORDER BY p.prog_offset LIMIT 1",
+        (encoder.epoch, prog_at),
+    )
 
 
 def _window_s(r: dict) -> float:
@@ -219,12 +238,12 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
     prompts = _prompt_names(db)
     my = library.my_votes(db, listener_id)
     have_tl = (mode == "program" and encoder is not None
-               and getattr(encoder, "started_wall", None) is not None)
+               and getattr(encoder, "pdt_origin", None) is not None)
 
     def entry(r: dict) -> dict:
         d = track_public(r, prompts, my) | {"airtime": r["airtime"]}
         if have_tl and r.get("prog_offset") is not None:
-            start_ms = (encoder.started_wall.replace(tzinfo=timezone.utc).timestamp()
+            start_ms = (encoder.pdt_origin.replace(tzinfo=timezone.utc).timestamp()
                         + r["prog_offset"]) * 1000.0
             d["start_pdt_ms"] = round(start_ms)
             d["end_pdt_ms"] = round(start_ms + _window_s(r) * 1000.0)
@@ -232,14 +251,21 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
             d["start_pdt_ms"] = d["end_pdt_ms"] = None
         return d
 
+    def rich_entry(r: dict) -> dict:
+        # Lyrics and art ride along on the live and the upcoming entry (the
+        # player swaps the card to the upcoming one locally at the boundary,
+        # so both need to carry everything the card shows); the recent rows
+        # stay lean.
+        return entry(r) | {"lyrics": lyrics_public(r.get("lyrics_snapshot")),
+                           "art": art_links(db, cfg, r["id"])}
+
     cur = _pick_current(mode, prog_at, rows)
-    current = entry(cur) if cur else None
-    if current is not None:
-        # Lyrics ride along on the current entry only — the player folds
-        # them out on each song change; the recent rows stay lean. Art
-        # likewise: only the On Air card and the media session need it.
-        current["lyrics"] = lyrics_public(cur.get("lyrics_snapshot"))
-        current["art"] = art_links(db, cfg, cur["id"])
+    current = rich_entry(cur) if cur else None
+    upcoming = None
+    if have_tl:
+        nxt = _next_airing(db, encoder, prog_at)
+        if nxt is not None:
+            upcoming = rich_entry(nxt)
     return {
         "server_time": iso(utcnow()),
         "server_time_ms": epoch_ms(),
@@ -247,6 +273,7 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
         "epoch": encoder.epoch if encoder is not None else None,
         "playback_paused": bool(db.get_setting("playback_paused")),
         "current": current,
+        "upcoming": upcoming,
         "recent": [entry(r) for r in rows[:10]],
     }
 

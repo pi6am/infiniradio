@@ -35,6 +35,7 @@ MODULES = [
     "test_lyrics_banned",   # banned phrases: gate, analysis, search, bulk ops
     "test_encoder",         # HLS generations: epoch naming, flush playlist bridge
     "test_feeder",          # in-place skip: same-timeline cut, played_s clamp
+    "test_schedule",        # player schedule: pre-filled upcoming, PDT anchor
     "test_library_page",    # library tab: column sorting, paging, URL state
     "test_pick_next",       # DJ selection: novelty/uncertainty weights, relaxation
 ]
