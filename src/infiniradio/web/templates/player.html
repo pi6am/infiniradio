@@ -199,19 +199,31 @@
   lbClose.textContent = '\u2715';
   lb.append(lbImg, lbClose);
   document.body.append(lb);
+  let lbOpen = false;
   function openLightbox() {
-    if (!curArt) return;
+    if (!curArt || lbOpen) return;
     const cur = sched && sched.current;
     lbImg.alt = (cur && cur.title) || '';
     lbImg.src = curArt.master || curArt.card;
     lb.classList.add('open');
     document.body.style.overflow = 'hidden';   // no page scroll behind
+    // One history entry for the open lightbox: the back button/gesture
+    // closes it (popstate below) instead of navigating away; explicit
+    // closes call history.back() to consume the entry.
+    history.pushState({ irLightbox: true }, '');
+    lbOpen = true;
   }
-  function closeLightbox() {
+  function closeLightbox(fromPop) {
+    if (!lbOpen) return;
+    lbOpen = false;
     lb.classList.remove('open');
     document.body.style.overflow = '';
     lbImg.removeAttribute('src');              // stop a still-loading master
+    if (!fromPop) history.back();
   }
+  window.addEventListener('popstate', function () {
+    closeLightbox(true);   // back from the pushed entry = close, stay put
+  });
   elArt.addEventListener('click', openLightbox);
   lb.addEventListener('click', closeLightbox);   // tap anywhere to dismiss
   document.addEventListener('keydown', function (e) {
