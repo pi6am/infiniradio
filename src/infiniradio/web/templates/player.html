@@ -13,20 +13,23 @@
 <meta property="og:image" content="{{ site_base }}/static/android-chrome-512x512.png">
 <meta name="twitter:card" content="summary">
 <style>
-  /* Track-art layouts (decided in JS once the image loads — layoutArt).
-     Without .has-art the card is exactly the pre-art presentation. */
+  /* Track-art layouts (decided in JS once the image loads — layoutArt:
+  landscape SCREENS get the side column, portrait screens the stacked
+  presentation; the image's own shape never picks the layout). Without
+  .has-art the card is exactly the pre-art presentation. */
   #np-art-col, #np-art-slot, #np-art { display: none; }
   #np-card.has-art #np-art { display: block; border-radius: 8px; }
-  /* Portrait / square: centered between title and subtitle */
+  /* Portrait screen: centered between title and subtitle, scaled to the
+     available width (capped) — smaller on narrow phones, never overflow */
   #np-card.has-art.portrait #np-art-slot { display: block; }
   #np-card.has-art.portrait #np-art {
-    max-width: min(100%, 320px); max-height: 340px;
+    width: 100%; max-width: 320px; height: auto;
     margin: 10px auto 12px;
   }
-  /* Landscape: a column left of the rest of the card (narrow viewports
-     fall back to the portrait placement — layoutArt re-decides there) */
-  #np-card.has-art.landscape { display: flex; gap: 18px; align-items: center; }
-  #np-card.has-art.landscape #np-art-col { display: block; flex: none; width: 264px; }
+  /* Landscape screen: art column left of transport + track data,
+     both starting at the top of the card */
+  #np-card.has-art.landscape { display: flex; gap: 18px; align-items: flex-start; }
+  #np-card.has-art.landscape #np-art-col { display: block; flex: none; width: 160px; }
   #np-card.has-art.landscape #np-main { flex: 1; min-width: 0; }
   #np-card.has-art.landscape #np-art { width: 100%; height: auto; }
 </style>
@@ -73,6 +76,8 @@
   const audioEl = document.getElementById('audio');
   const elCard = document.getElementById('np-card');
   const elArt = document.createElement('img');   // placed by layoutArt
+  elArt.id = 'np-art';        // the CSS below keys on this id
+  elArt.alt = '';
   const elArtCol = document.getElementById('np-art-col');
   const elArtSlot = document.getElementById('np-art-slot');
   const elTitle = document.getElementById('np-title');
@@ -125,27 +130,24 @@
 
   // ---- track art: three presentations --------------------------------------
   // No art (or not yet loaded): the card renders exactly as it did before
-  // art existed. Portrait/square art slots in between title and subtitle;
-  // landscape art becomes a column left of everything else. Placement is
-  // decided from the image's real dimensions once it loads, and re-decided
-  // when the viewport crosses the width where the column stops fitting
-  // (narrow screens stack like portrait).
+  // art existed. The SCREEN orientation picks the presentation — landscape
+  // screens (desktop, laptop, sideways phone) get the art as a column left
+  // of the transport and metadata; portrait screens stack it between title
+  // and subtitle. Re-decided on orientation change, after the image loads.
   let artShown = false;
   let artLoaded = false;
-  let artAspect = 1;
-  const artWideMQ = window.matchMedia('(min-width: 680px)');
+  const artSideMQ = window.matchMedia('(orientation: landscape)');
   function layoutArt() {
     if (!artShown || !artLoaded) return;
-    const landscape = artAspect > 1 && artWideMQ.matches;
+    const side = artSideMQ.matches;
     elCard.classList.add('has-art');
-    elCard.classList.toggle('landscape', landscape);
-    elCard.classList.toggle('portrait', !landscape);
-    const parent = landscape ? elArtCol : elArtSlot;
+    elCard.classList.toggle('landscape', side);
+    elCard.classList.toggle('portrait', !side);
+    const parent = side ? elArtCol : elArtSlot;
     if (elArt.parentElement !== parent) parent.appendChild(elArt);
   }
   elArt.addEventListener('load', function () {
     artLoaded = true;
-    artAspect = elArt.naturalWidth / (elArt.naturalHeight || 1) || 1;
     layoutArt();
   });
   elArt.addEventListener('error', function () {
@@ -153,7 +155,7 @@
     artShown = false;
     elCard.classList.remove('has-art', 'portrait', 'landscape');
   });
-  artWideMQ.addEventListener('change', layoutArt);
+  artSideMQ.addEventListener('change', layoutArt);
   function setTrackArt(art) {
     if (art && art.card) {
       artShown = true;
