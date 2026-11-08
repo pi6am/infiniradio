@@ -15,7 +15,9 @@ import _helpers
 
 _helpers.ensure_repo()
 
+from infiniradio import library
 from infiniradio.db import DB
+from infiniradio.llm.images import MOCK_PNG
 from infiniradio.util import iso, utcnow
 from infiniradio.web import routes_public
 from _helpers import RT
@@ -96,6 +98,24 @@ def run() -> None:
         assert v["lyrics"] == VOCAL_CLEAN
         assert i["lyrics"] is None
         print("5. /api/track: cleaned lyrics per track")
+
+        # 5b. /api/track/{id} also carries the current art pick's links
+        # (None when the track has none). Files are written directly —
+        # art_file_map reads disk, so no ffmpeg is needed here.
+        assert v["art"] is None
+        aid = db.execute(
+            "INSERT INTO track_art (track_id, workflow_id, created_at)"
+            " VALUES (?, 'cover', ?)", (voc, iso(utcnow())))
+        adir = library.art_dir(cfg, voc)
+        adir.mkdir(parents=True, exist_ok=True)
+        (adir / f"{aid}.png").write_bytes(MOCK_PNG)
+        (adir / f"{aid}_512.jpg").write_bytes(b"fake-thumb")
+        db.execute("UPDATE tracks SET art_id = ? WHERE id = ?", (aid, voc))
+        v2 = json.loads(asyncio.run(routes_public.api_track(req, voc)).body)
+        assert v2["art"]["master"] == f"/art/{voc}/{aid}/full.png"
+        assert v2["art"]["card"] == f"/art/{voc}/{aid}/512.jpg"
+        assert v2["art"]["card_px"] == 512
+        print("5b. /api/track: art links for the current pick")
 
         print("test_lyrics_public: ALL PASSED")
     finally:

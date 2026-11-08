@@ -389,9 +389,12 @@ async def api_track(request: Request, track_id: int):
     if not row or row["status"] == "deleted":
         return JSONResponse({"error": "not found"}, status_code=404)
     listener = ensure_listener(request)
+    # Art links ride here too (not just on the schedule's current entry):
+    # the Discord bot's /art command and per-card art button fetch by id.
     return JSONResponse(track_public(row, _prompt_names(rt.db),
                                      library.my_votes(rt.db, listener[0]))
-                        | {"lyrics": lyrics_public(row["lyrics_snapshot"])})
+                        | {"lyrics": lyrics_public(row["lyrics_snapshot"]),
+                           "art": art_links(rt.db, rt.cfg, track_id)})
 
 
 # ------------------------------------------------------------------ track art
