@@ -318,51 +318,69 @@
   // (AVRCP) — so track titles appear on the dash. Chrome maps this 1:1;
   // iOS/Safari support is partial (lock screen yes, cars inconsistently).
   let mediaTrackId = null;
+  function mediaArtwork(t) {
+    // No-art tracks: the station icons (known to render everywhere).
+    // Art tracks: ONLY the track's art. Chrome picks the artwork whose
+    // declared sizes best match the notification (512x512 on Android),
+    // and a same-size fallback entry wins ties — the station icon was
+    // shadowing the track art on both the phone card and the car.
+    if (!t.art) {
+      return [
+        { src: '/static/android-chrome-192x192.png', sizes: '192x192', type: 'image/png' },
+        { src: '/static/android-chrome-512x512.png', sizes: '512x512', type: 'image/png' }
+      ];
+    }
+    const one = function (u, px) {
+      return { src: u, sizes: px + 'x' + px,
+               type: /\.jpe?g(\?|$)/.test(u) ? 'image/jpeg' : 'image/png' };
+    };
+    const a = [];
+    if (t.art.icon_px) a.push(one(t.art.icon, t.art.icon_px));
+    if (t.art.card_px) a.push(one(t.art.card, t.art.card_px));
+    return a.length ? a : [
+      { src: '/static/android-chrome-512x512.png', sizes: '512x512', type: 'image/png' }
+    ];
+  }
   function pushMediaSession(t) {
     if (!('mediaSession' in navigator) || !t || t.id === mediaTrackId) return;
     mediaTrackId = t.id;
-    // Artwork: per-track sizes when the track has art (small first — the
-    // size a phone/car fetches over Bluetooth), station icon as fallback.
-    let artwork = [
-      { src: '/static/android-chrome-192x192.png', sizes: '192x192', type: 'image/png' },
-      { src: '/static/android-chrome-512x512.png', sizes: '512x512', type: 'image/png' }
-    ];
-    if (t.art) {
-      const one = function (u, px) {
-        const o = { src: u, type: /\.jpe?g(\?|$)/.test(u) ? 'image/jpeg' : 'image/png' };
-        if (px) o.sizes = px + 'x' + px;
-        return o;
-      };
-      artwork = [];
-      if (t.art.icon_px) artwork.push(one(t.art.icon, t.art.icon_px));
-      if (t.art.card_px) artwork.push(one(t.art.card, t.art.card_px));
-      // every entry carries sizes, matching the shape that reliably
-      // renders in OS media UIs; the sizes-less ~2MB master PNG is
-      // deliberately excluded (it belongs to the lightbox, not the
-      // notification/car display).
-      artwork.push({ src: '/static/android-chrome-512x512.png', sizes: '512x512',
-                     type: 'image/png' });
-    }
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: t.title,
-        artist: t.prompt,
-        album: 'infiniradio',
-        artwork: artwork
-      });
-    } catch (e) { return; }
-    // Song-relative position for progress displays; the PDT timeline is
-    // only present in program-sync mode and needs a live anchor.
-    const now = playingPdt();
-    if (t.start_pdt_ms == null || now == null) return;
-    try {
-      const pos = (now - t.start_pdt_ms) / 1000;
-      const dur = (t.end_pdt_ms - t.start_pdt_ms) / 1000;
-      if (pos >= 0 && dur > pos)
-        navigator.mediaSession.setPositionState({ duration: dur,
-                                                  playbackRate: 1,
-                                                  position: pos });
-    } catch (e) { /* refused values are ignored, never fatal */ }
+    const finish = function () {
+      if (mediaTrackId !== t.id) return;      // a newer track superseded us
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: t.title,
+          artist: t.prompt,
+          album: 'infiniradio',
+          artwork: mediaArtwork(t)
+        });
+      } catch (e) { return; }
+      // Song-relative position for progress displays; the PDT timeline is
+      // only present in program-sync mode and needs a live anchor.
+      const now = playingPdt();
+      if (t.start_pdt_ms == null || now == null) return;
+      try {
+        const pos = (now - t.start_pdt_ms) / 1000;
+        const dur = (t.end_pdt_ms - t.start_pdt_ms) / 1000;
+        if (pos >= 0 && dur > pos)
+          navigator.mediaSession.setPositionState({ duration: dur,
+                                                    playbackRate: 1,
+                                                    position: pos });
+      } catch (e) { /* refused values are ignored, never fatal */ }
+    };
+    // Warm the smallest artwork into HTTP cache BEFORE assigning metadata:
+    // Chrome fetches notification artwork asynchronously, and if the first
+    // metadata push lands without the bitmap, Android can ship a no-art
+    // update — which many Bluetooth/car stacks then never refresh (the
+    // frozen-missing-art case). 2s cap so a stalled fetch can't leave the
+    // session metadata-less.
+    const art0 = mediaArtwork(t)[0];
+    let settled = false;
+    const go = function () { if (!settled) { settled = true; finish(); } };
+    if (!art0) { go(); return; }
+    const warm = new Image();
+    warm.onload = warm.onerror = go;
+    setTimeout(go, 2000);
+    warm.src = art0.src;
   }
   if ('mediaSession' in navigator) {
     // Cars send AVRCP play/pause as media-session controls; without
