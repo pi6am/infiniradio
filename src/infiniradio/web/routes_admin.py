@@ -1556,6 +1556,15 @@ async def job_detail(request: Request, job_id: int):
             outputs = (_json.loads(job["progress"]) or {}).get("outputs") or {}
         except _json.JSONDecodeError:
             outputs = {}
+    # Art jobs: the artwork lives on the track (regens overwrite in place,
+    # versioned), so link the track's CURRENT art.
+    art_links_ = None
+    art_track = None
+    if job.get("kind") == "art" and job.get("track_id"):
+        art_track = rt.db.one(
+            "SELECT id, title, art_version FROM tracks WHERE id = ?", (job["track_id"],))
+        if art_track and art_track["art_version"]:
+            art_links_ = art_links(rt.cfg, art_track["id"], art_track["art_version"])
     llm_s = sum(s["duration_s"] or 0.0 for s in stages)
     llm_conts = sum(int((s.get("usage") or {}).get("continuations") or 0) for s in stages)
     registry = (getattr(rt, "artworkflows", {})
@@ -1566,6 +1575,7 @@ async def job_detail(request: Request, job_id: int):
         _ctx(request, j=job, stages=stages, outputs=outputs, workflow=workflow,
              stage_progress=_stage_progress(rt, job),
              timings=_job_timings(job),
+             art=art_links_, art_track=art_track,
              llm_summary={"calls": len(stages), "seconds": round(llm_s, 1),
                           "continuations": llm_conts}))
 
