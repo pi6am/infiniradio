@@ -426,6 +426,9 @@ user group write access once (the setgid directories make new files
 inherit it, so this keeps working):
 
 ```bash
+sudo chown -R infiniradio:infiniradio /opt/infiniradio   # repair: other tooling
+                                                         # (discord bot setup etc.)
+                                                         # may re-own the tree
 sudo usermod -aG infiniradio <you>                # then log out and back in
 sudo chmod -R g+rwX /opt/infiniradio
 sudo find /opt/infiniradio -type d -exec chmod g+s {} +
