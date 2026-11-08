@@ -7,7 +7,7 @@
     <span class="pill {% if j.status == 'done' %}ok{% elif j.status in ('failed', 'cancelled') %}err{% endif %}">{{ j.status }}</span></h2>
   <table>
     <tr><th>kind</th><td>{% if j.kind == 'art' %}track art for
-        <a href="/admin/track/{{ j.track_id }}">{{ art_track.title if art_track else j.track_id }}</a>
+        <a href="/admin/track/{{ j.track_id }}">track {{ j.track_id }}</a>
         {% elif j.parent_track_id %}variation of
         <a href="/admin/track/{{ j.parent_track_id }}">{{ j.parent_title or j.parent_track_id }}</a>
         {% elif j.workflow_id %}lyrics workflow{% else %}new track (prompt){% endif %}</td></tr>
@@ -50,13 +50,11 @@
   <a href="{{ art.master }}" target="_blank" title="full resolution">
     <img src="{{ art.master }}" alt="track art"
          style="width:min(100%,340px);border-radius:8px;display:block;margin-bottom:8px"></a>
-  <p class="muted" style="margin:0 0 10px">current art on
-    <a href="/admin/track/{{ j.track_id }}">track {{ j.track_id }}</a>
-    (a later regeneration would have replaced it)</p>
-  {% else %}
-  <p class="muted" style="margin:0 0 10px">no art stored on
-    <a href="/admin/track/{{ j.track_id }}">track {{ j.track_id }}</a>
-    (removed, or the render phase never completed)</p>
+  <p class="muted" style="margin:0 0 10px">this job's image — every art job
+    keeps its own; the track page has the full set to review and re-pick</p>
+  {% elif j.status == 'done' %}
+  <p class="muted" style="margin:0 0 10px">(no stored image for this job —
+    it predates per-job art history)</p>
   {% endif %}
   <p class="muted" style="margin-bottom:0">image prompt:</p>
   <pre class="abc">{{ outputs.image_prompt }}</pre>

@@ -238,6 +238,9 @@ def create_app(config_path: str | Path | None = None, mockaudio: bool = False,
         library.import_prompts(db, cfg)
         library.import_styles(db, cfg)
         library.seed_tags(db, cfg)
+        # v14 art layout -> per-image rows (no-op once relocated; the SQL
+        # side of migration 15 created the rows, this moves their files).
+        library.migrate_legacy_art(db, cfg)
         # Nothing runs yet: fail jobs/tracks orphaned by a previous crash
         # (a 'running' job is never re-claimed, and its placeholder track
         # would count as "generating" forever).

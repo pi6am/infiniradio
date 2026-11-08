@@ -18,7 +18,7 @@ from .. import art, dj, janitor, library, phrases
 from ..config import RUNTIME_SETTINGS, runtime_get
 from ..util import fmt_duration, human_bytes, iso, normalize_newlines, utcnow, wilson_score
 from ..web.auth import SESSION_COOKIE, LoginThrottle, Sessions, verify_password, stored_password_hash
-from ..web.routes_public import art_links, now_playing
+from ..web.routes_public import art_links, art_links_for, now_playing
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin")
@@ -567,12 +567,20 @@ async def track_page(request: Request, track_id: int):
         art_note = "no art workflows loaded (art.workflows_dir)"
     else:
         art_note = "art needs the LLM ([llm] enabled)"
+    # The gallery: every stored image for this track, newest first, with
+    # its links; the template marks the current pick and offers use/delete.
+    art_rows = []
+    for r in library.track_art_rows(db, track_id):
+        links = art_links_for(rt.cfg, track_id, r["id"])
+        if links:
+            art_rows.append({"row": r, **links})
+    art_current = next((a for a in art_rows if a["row"]["id"] == row["art_id"]), None)
     return request.app.state.templates.TemplateResponse(
         request, "admin/track.html",
         _ctx(request, t=track, parent=parent,
              children=[_track_with_meta(db, c) for c in children],
              votes=votes, plays=plays, prompts=prompts, gen_job=gen_job,
-             art=art_links(rt.cfg, track_id, row["art_version"] or 0),
+             art_rows=art_rows, art_current=art_current,
              art_job=art_job,
              art_workflows=art.enabled_art_workflows(rt),
              art_ready=art_ready, art_note=art_note))
@@ -664,13 +672,31 @@ async def track_art_regen(request: Request, track_id: int,
     return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
 
 
-@router.post("/track/{track_id}/art/remove")
-async def track_art_remove(request: Request, track_id: int, csrf: str = Form("")):
+@router.post("/art/{art_id}/use")
+async def art_use(request: Request, art_id: int, csrf: str = Form("")):
+    """Make one stored image the track's current pick."""
     if not _is_admin(request) or not _csrf_ok(request, csrf):
         return PlainTextResponse("forbidden", status_code=403)
     rt = request.app.state.rt
-    library.remove_art(rt.db, rt.cfg, track_id)
-    return RedirectResponse(f"/admin/track/{track_id}", status_code=303)
+    row = rt.db.one("SELECT track_id FROM track_art WHERE id = ?", (art_id,))
+    if row is None:
+        return PlainTextResponse("no such art", status_code=404)
+    library.set_current_art(rt.db, row["track_id"], art_id)
+    return RedirectResponse(f"/admin/track/{row['track_id']}", status_code=303)
+
+
+@router.post("/art/{art_id}/delete")
+async def art_delete(request: Request, art_id: int, csrf: str = Form("")):
+    """Delete one stored image (row + files). Deleting the current pick
+    leaves the track artless until another is picked or generated."""
+    if not _is_admin(request) or not _csrf_ok(request, csrf):
+        return PlainTextResponse("forbidden", status_code=403)
+    rt = request.app.state.rt
+    row = rt.db.one("SELECT track_id FROM track_art WHERE id = ?", (art_id,))
+    if row is None:
+        return PlainTextResponse("no such art", status_code=404)
+    library.remove_art(rt.db, rt.cfg, art_id)
+    return RedirectResponse(f"/admin/track/{row['track_id']}", status_code=303)
 
 
 @router.post("/track/{track_id}/queue_next")
@@ -946,8 +972,9 @@ async def prompts_page(request: Request):
     art_off = set(rt.db.get_setting("art_workflows_disabled") or [])
     for w in getattr(rt, "artworkflows", {}).values():
         tracks = rt.db.one(
-            "SELECT COUNT(*) AS n FROM tracks WHERE art_workflow_id = ?"
-            " AND art_version > 0", (w.name,))["n"]
+            "SELECT COUNT(*) AS n FROM tracks t"
+            " JOIN track_art ta ON ta.id = t.art_id"
+            " WHERE ta.workflow_id = ?", (w.name,))["n"]
         on = w.enabled and w.name not in art_off
         artworkflows.append({"name": w.name, "description": w.description,
                              "enabled": on, "file_enabled": w.enabled,
@@ -1556,15 +1583,14 @@ async def job_detail(request: Request, job_id: int):
             outputs = (_json.loads(job["progress"]) or {}).get("outputs") or {}
         except _json.JSONDecodeError:
             outputs = {}
-    # Art jobs: the artwork lives on the track (regens overwrite in place,
-    # versioned), so link the track's CURRENT art.
+    # Art jobs: THIS job's image. Art rows are per-job and immutable, so
+    # what this page shows is exactly what this job produced — later
+    # regenerations or re-picks change nothing here.
     art_links_ = None
-    art_track = None
-    if job.get("kind") == "art" and job.get("track_id"):
-        art_track = rt.db.one(
-            "SELECT id, title, art_version FROM tracks WHERE id = ?", (job["track_id"],))
-        if art_track and art_track["art_version"]:
-            art_links_ = art_links(rt.cfg, art_track["id"], art_track["art_version"])
+    if job.get("kind") == "art":
+        art_row = rt.db.one("SELECT * FROM track_art WHERE job_id = ?", (job["id"],))
+        if art_row is not None:
+            art_links_ = art_links_for(rt.cfg, art_row["track_id"], art_row["id"])
     llm_s = sum(s["duration_s"] or 0.0 for s in stages)
     llm_conts = sum(int((s.get("usage") or {}).get("continuations") or 0) for s in stages)
     registry = (getattr(rt, "artworkflows", {})
@@ -1575,7 +1601,7 @@ async def job_detail(request: Request, job_id: int):
         _ctx(request, j=job, stages=stages, outputs=outputs, workflow=workflow,
              stage_progress=_stage_progress(rt, job),
              timings=_job_timings(job),
-             art=art_links_, art_track=art_track,
+             art=art_links_,
              llm_summary={"calls": len(stages), "seconds": round(llm_s, 1),
                           "continuations": llm_conts}))
 

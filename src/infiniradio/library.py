@@ -4,8 +4,8 @@ Layout under data_dir:
   music/<track_id>/original.<ext>   as generated (flac or mp3)
   music/<track_id>/playout.m4a     loudness-normalized AAC used on air
   music/<track_id>/score.abc        ABC notation (also stored in the DB row)
-  music/<track_id>/art.png          track art master (normalized to PNG)
-  music/<track_id>/art_512.jpg ...  scaled thumbnails (art.thumbs sizes)
+  music/<track_id>/art/<id>.png     track art (one dir entry per generated
+  music/<track_id>/art/<id>_N.jpg   image; tracks.art_id names the current)
 """
 
 from __future__ import annotations
@@ -171,6 +171,7 @@ def delete_track(db: DB, cfg: Config, track_id: int) -> bool:
     tdir = track_dir(cfg, track_id)
     if tdir.is_dir():
         shutil.rmtree(tdir, ignore_errors=True)
+    db.execute("DELETE FROM track_art WHERE track_id = ?", (track_id,))
     db.execute(
         "UPDATE tracks SET status = 'deleted', original_path = '', playout_path = '',"
         " size_bytes = 0 WHERE id = ?", (track_id,)
@@ -346,34 +347,67 @@ def authored_lyrics(text: str | None) -> str | None:
     return cleaned or None
 
 
-_ART_GLOB = ("art.png", "art_*.png", "art_*.jpg", "art_*.jpeg", "art_*.webp")
+_LEGACY_ART_GLOB = ("art.png", "art_*.png", "art_*.jpg", "art_*.jpeg", "art_*.webp")
 
 
-def art_file_map(cfg: Config, track_id: int) -> dict[str, Path]:
-    """Every art file that exists for a track, keyed by its URL stem:
-    'full' (the master) and each thumbnail's pixel size ('512', '192',
-    ...). Derived from disk, not config — a later format/size change
-    leaves older files serving until the track's next regeneration."""
-    tdir = track_dir(cfg, track_id)
+def art_dir(cfg: Config, track_id: int) -> Path:
+    return track_dir(cfg, track_id) / "art"
+
+
+def art_file_map(cfg: Config, track_id: int, art_id: int) -> dict[str, Path]:
+    """One art image's files keyed by URL stem: 'full' (the master) and
+    each thumbnail's pixel size ('512', ...). Derived from disk, not
+    config — a later format/size change leaves older files serving."""
+    adir = art_dir(cfg, track_id)
     out: dict[str, Path] = {}
-    if not tdir.is_dir():
+    if not adir.is_dir():
         return out
-    if (tdir / "art.png").is_file():
-        out["full"] = tdir / "art.png"
-    for pattern in _ART_GLOB[1:]:
-        for p in tdir.glob(pattern):
-            stem = p.stem[len("art_"):]
-            if stem.isdigit():
-                out.setdefault(stem, p)
+    if (adir / f"{art_id}.png").is_file():
+        out["full"] = adir / f"{art_id}.png"
+    for p in sorted(adir.glob(f"{art_id}_*.*")):
+        stem = p.stem.partition("_")[2]
+        if stem.isdigit():
+            out.setdefault(stem, p)
     return out
 
 
 def _art_bytes(cfg: Config, track_id: int) -> int:
+    """Every art byte on disk for a track (current layout + any legacy
+    strays at the track-dir root until the boot relocation clears them)."""
     tdir = track_dir(cfg, track_id)
     if not tdir.is_dir():
         return 0
-    return sum(p.stat().st_size for pattern in _ART_GLOB for p in tdir.glob(pattern)
-               if p.is_file())
+    total = 0
+    if (tdir / "art").is_dir():
+        total += sum(p.stat().st_size for p in (tdir / "art").glob("*") if p.is_file())
+    total += sum(p.stat().st_size for pattern in _LEGACY_ART_GLOB
+                 for p in tdir.glob(pattern) if p.is_file())
+    return total
+
+
+def migrate_legacy_art(db: DB, cfg: Config) -> int:
+    """One-time v14 -> per-image relocation: the migrated track_art row
+    (the one whose files are missing) adopts the legacy art.png / art_N.*
+    files at the track-dir root. Idempotent — nothing to do once no legacy
+    files remain; rows with no files at either location stay fileless
+    (that art was lost, not misplaced)."""
+    moved = 0
+    for row in db.query("SELECT * FROM track_art"):
+        adir = art_dir(cfg, row["track_id"])
+        if (adir / f"{row['id']}.png").is_file():
+            continue                     # already in the new layout
+        legacy = track_dir(cfg, row["track_id"]) / "art.png"
+        if not legacy.is_file():
+            continue
+        adir.mkdir(parents=True, exist_ok=True)
+        legacy.rename(adir / f"{row['id']}.png")
+        tdir = track_dir(cfg, row["track_id"])
+        for p in tdir.glob("art_*.*"):
+            p.rename(adir / f"{row['id']}_{p.stem[len('art_'):]}{p.suffix}")
+        moved += 1
+    if moved:
+        log.info("relocated %d legacy track art image(s) onto their rows", moved)
+    return moved
 
 
 async def _ffmpeg(cfg: Config, *args: str) -> None:
@@ -393,73 +427,107 @@ def _jpeg_q(quality: int) -> int:
 
 
 async def store_art(db: DB, cfg: Config, track_id: int, image_bytes: bytes, *,
-                    seed: int | None, workflow_id: str | None, prompt: str) -> dict:
-    """Write a track's artwork: master art.png (any provider format is
-    normalized through ffmpeg), then the configured thumbnails (scaled;
-    jpeg by default, png when art.thumb_format = "png" for a lossless
-    pipeline). Bumps art_version — the public /art URLs carry it (?v=),
-    so caches never serve a replaced image. Art bytes count toward
-    size_bytes so the disk quota stays honest."""
-    tdir = track_dir(cfg, track_id)
-    tdir.mkdir(parents=True, exist_ok=True)
-    old_bytes = _art_bytes(cfg, track_id)
+                    job_id: int | None = None, seed: int | None = None,
+                    workflow_id: str | None = None, prompt: str = "",
+                    make_current: bool = True) -> int:
+    """Store ONE generated image as its own immutable track_art row: master
+    <art_id>.png (any provider format normalized through ffmpeg), then the
+    configured thumbnails (jpeg by default; png when art.thumb_format =
+    "png"). make_current points the track at it — the newest art is the
+    pick until the admin re-picks. Returns the art id. Art bytes count
+    toward size_bytes so the disk quota stays honest."""
+    art_id = db.execute(
+        "INSERT INTO track_art (track_id, job_id, workflow_id, seed, prompt, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (track_id, job_id, workflow_id, seed, prompt[:4000], iso(utcnow())))
+    adir = art_dir(cfg, track_id)
+    adir.mkdir(parents=True, exist_ok=True)
+    try:
+        master = adir / f"{art_id}.png"
+        if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+            master.write_bytes(image_bytes)
+        else:
+            # jpeg/webp/whatever the endpoint returned: ffmpeg sniffs the
+            # content itself, so the temp name's extension is irrelevant.
+            raw = adir / f"{art_id}.tmp"
+            raw.write_bytes(image_bytes)
+            try:
+                await _ffmpeg(cfg, "-i", str(raw), str(master))
+            finally:
+                raw.unlink(missing_ok=True)
+        if not master.is_file():
+            raise RuntimeError("art normalization produced no master image")
 
-    master = tdir / "art.png"
-    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
-        master.write_bytes(image_bytes)
-    else:
-        # jpeg/webp/whatever the endpoint returned: ffmpeg sniffs the
-        # content itself, so the temp name's extension is irrelevant.
-        raw = tdir / "art_in.tmp"
-        raw.write_bytes(image_bytes)
-        try:
-            await _ffmpeg(cfg, "-i", str(raw), str(master))
-        finally:
-            raw.unlink(missing_ok=True)
-    if not master.is_file():
-        raise RuntimeError("art normalization produced no master image")
+        thumb_ext = "png" if str(cfg.get("art.thumb_format", "jpeg")) == "png" else "jpg"
+        for size in cfg.get("art.thumbs") or []:
+            n = int(size)
+            if n <= 0:
+                continue
+            out = adir / f"{art_id}_{n}.{thumb_ext}"
+            args = ["-i", str(master), "-vf", f"scale={n}:{n}"]
+            if thumb_ext == "jpg":
+                args += ["-q:v", str(_jpeg_q(int(cfg.get("art.thumb_quality", 90))))]
+            await _ffmpeg(cfg, *args, str(out))
+    except Exception:
+        # The row is useless without its files; leave neither behind (only
+        # THIS image's files — siblings in the directory survive).
+        for p in list(adir.glob(f"{art_id}*")):
+            p.unlink(missing_ok=True)
+        db.execute("DELETE FROM track_art WHERE id = ?", (art_id,))
+        raise
 
-    thumb_ext = "png" if str(cfg.get("art.thumb_format", "jpeg")) == "png" else "jpg"
-    for size in cfg.get("art.thumbs") or []:
-        n = int(size)
-        if n <= 0:
-            continue
-        out = tdir / f"art_{n}.{thumb_ext}"
-        args = ["-i", str(master), "-vf", f"scale={n}:{n}"]
-        if thumb_ext == "jpg":
-            args += ["-q:v", str(_jpeg_q(int(cfg.get("art.thumb_quality", 90))))]
-        await _ffmpeg(cfg, *args, str(out))
-
-    new_bytes = _art_bytes(cfg, track_id)
-    row = db.one("SELECT art_version FROM tracks WHERE id = ?", (track_id,))
-    db.execute(
-        "UPDATE tracks SET art_version = ?, art_seed = ?, art_workflow_id = ?,"
-        " art_prompt = ?, art_generated_at = ?,"
-        " size_bytes = MAX(0, size_bytes - ?) + ? WHERE id = ?",
-        ((row["art_version"] if row else 0) + 1, seed, workflow_id,
-         prompt[:4000], iso(utcnow()), old_bytes, new_bytes, track_id))
-    log.info("stored art for track %s (%s)", track_id, human_bytes(new_bytes))
-    return db.one("SELECT * FROM tracks WHERE id = ?", (track_id,)) or {}
+    added = sum(p.stat().st_size for p in adir.glob(f"{art_id}*") if p.is_file())
+    db.execute("UPDATE tracks SET size_bytes = size_bytes + ? WHERE id = ?",
+               (added, track_id))
+    if make_current:
+        db.execute("UPDATE tracks SET art_id = ? WHERE id = ?", (art_id, track_id))
+    log.info("stored art #%s for track %s (%s)", art_id, track_id, human_bytes(added))
+    return art_id
 
 
-def remove_art(db: DB, cfg: Config, track_id: int) -> bool:
-    """Delete a track's art files and reset the art columns."""
-    tdir = track_dir(cfg, track_id)
-    old_bytes = _art_bytes(cfg, track_id)
-    removed = False
-    if tdir.is_dir():
-        for pattern in _ART_GLOB:
-            for p in tdir.glob(pattern):
-                if p.is_file():
-                    p.unlink(missing_ok=True)
-                    removed = True
-    if not removed:
+def track_art_rows(db: DB, track_id: int) -> list[dict]:
+    return db.query("SELECT * FROM track_art WHERE track_id = ?"
+                    " ORDER BY id DESC", (track_id,))
+
+
+def current_art(db: DB, track_id: int) -> dict | None:
+    row = db.one("SELECT art_id FROM tracks WHERE id = ?", (track_id,))
+    if not row or not row["art_id"]:
+        return None
+    return db.one("SELECT * FROM track_art WHERE id = ?", (row["art_id"],))
+
+
+def set_current_art(db: DB, track_id: int, art_id: int) -> bool:
+    """Point the track at one of its images (the admin's pick)."""
+    row = db.one("SELECT id FROM track_art WHERE id = ? AND track_id = ?",
+                 (art_id, track_id))
+    if row is None:
         return False
-    db.execute(
-        "UPDATE tracks SET art_version = 0, art_seed = NULL, art_workflow_id = NULL,"
-        " art_prompt = NULL, art_generated_at = NULL,"
-        " size_bytes = MAX(0, size_bytes - ?) WHERE id = ?", (old_bytes, track_id))
-    log.info("removed art from track %s (%s)", track_id, human_bytes(old_bytes))
+    db.execute("UPDATE tracks SET art_id = ? WHERE id = ?", (art_id, track_id))
+    log.info("track %s: current art -> #%s", track_id, art_id)
+    return True
+
+
+def remove_art(db: DB, cfg: Config, art_id: int) -> bool:
+    """Delete ONE image: its row and its files. Deleting the current pick
+    leaves the track artless (the player falls back to the station icon)
+    until another image is picked or generated."""
+    row = db.one("SELECT * FROM track_art WHERE id = ?", (art_id,))
+    if row is None:
+        return False
+    adir = art_dir(cfg, row["track_id"])
+    gone = 0
+    for p in list(adir.glob(f"{art_id}.*")) + list(adir.glob(f"{art_id}_*.*")):
+        if p.is_file():
+            gone += p.stat().st_size
+            p.unlink(missing_ok=True)
+    db.execute("DELETE FROM track_art WHERE id = ?", (art_id,))
+    db.execute("UPDATE tracks SET art_id = NULL WHERE id = ? AND art_id = ?",
+               (row["track_id"], art_id))
+    db.execute("UPDATE tracks SET size_bytes = MAX(0, size_bytes - ?) WHERE id = ?",
+               (gone, row["track_id"]))
+    log.info("removed art #%s from track %s (%s)", art_id, row["track_id"],
+             human_bytes(gone))
     return True
 
 

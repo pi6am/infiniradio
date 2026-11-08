@@ -367,7 +367,7 @@ def backfill_tick(rt) -> None:
         return
     row = rt.db.one(
         "SELECT t.id FROM tracks t"
-        " WHERE t.status = 'ready' AND t.art_version = 0"
+        " WHERE t.status = 'ready' AND t.art_id IS NULL"
         " AND NOT EXISTS (SELECT 1 FROM generation_jobs j"
         "                 WHERE j.kind = 'art' AND j.track_id = t.id)"
         " ORDER BY t.id LIMIT 1")
@@ -507,8 +507,8 @@ async def run_art_render(rt, job: dict) -> None:
         log.info("job %s: cancelled during art render — discarding image", job["id"])
         return
     await library.store_art(db, rt.cfg, job["track_id"], image_bytes,
-                            seed=job.get("seed"), workflow_id=job["workflow_id"],
-                            prompt=prompt)
+                            job_id=job["id"], seed=job.get("seed"),
+                            workflow_id=job["workflow_id"], prompt=prompt)
     db.execute("UPDATE generation_jobs SET status = 'done', finished_at = ?,"
                " used_seed = ? WHERE id = ? AND status = 'running'",
                (iso(utcnow()), job.get("seed"), job["id"]))

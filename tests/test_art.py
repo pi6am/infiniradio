@@ -174,14 +174,18 @@ async def _main(cfg, tmp) -> None:
     job = db.one("SELECT * FROM generation_jobs WHERE id = ?", (job_id,))
     assert job["status"] == "done" and job["used_seed"] == job["seed"]
     row = db.one("SELECT * FROM tracks WHERE id = ?", (t1,))
-    assert row["art_version"] == 1 and row["art_workflow_id"] == job["workflow_id"]
-    assert row["art_prompt"] == outputs["image_prompt"]
-    tdir = library.track_dir(cfg, t1)
-    assert (tdir / "art.png").is_file()
-    assert (tdir / "art_512.jpg").is_file() and (tdir / "art_192.jpg").is_file()
+    assert row["art_id"] is not None
+    art_row = db.one("SELECT * FROM track_art WHERE id = ?", (row["art_id"],))
+    assert art_row["workflow_id"] == job["workflow_id"]
+    assert art_row["job_id"] == job_id and art_row["prompt"] == outputs["image_prompt"]
+    adir = library.art_dir(cfg, t1)
+    assert (adir / f"{row['art_id']}.png").is_file()
+    assert (adir / f"{row['art_id']}_512.jpg").is_file()
+    assert (adir / f"{row['art_id']}_192.jpg").is_file()
+    first_art_id = row["art_id"]
     size1 = row["size_bytes"]
     assert size1 > 0
-    print(f"art render: master + 2 jpeg thumbs stored, size_bytes={size1}, v1")
+    print(f"art render: master + 2 jpeg thumbs stored as art #{first_art_id}")
 
     # the analysis workflows: single stage, Prompt:-anchored extraction
     j3 = art.enqueue_art_job(rt, t2, workflow_id="analysis-abstract")
@@ -193,38 +197,56 @@ async def _main(cfg, tmp) -> None:
     assert out3.startswith("Album art of") and len(out3) > 60, out3[:80]
     print("analysis workflow: single stage, Prompt:-anchored extraction ok")
 
-    # ---- links + versioning + regeneration ---------------------------------
-    links = routes_public.art_links(cfg, t1, row["art_version"])
-    assert links["card"].startswith(f"/art/{t1}/512.jpg?v=1")
-    assert links["icon"].startswith(f"/art/{t1}/192.jpg?v=1")
-    assert links["master"].startswith(f"/art/{t1}/full.png?v=1")
+    # ---- links, history, current pick, delete -------------------------------
+    links = routes_public.art_links(db, cfg, t1)
+    assert links["card"].startswith(f"/art/{t1}/{first_art_id}/512.jpg")
+    assert links["icon"].startswith(f"/art/{t1}/{first_art_id}/192.jpg")
+    assert links["master"].startswith(f"/art/{t1}/{first_art_id}/full.png")
     assert links["card_px"] == 512 and links["icon_px"] == 192
-    assert routes_public.art_links(cfg, t1, 0) is None
-    # regenerate: same track, second job, version bumps (URLs change)
+    # regenerate: a SECOND immutable image — the first is untouched
     j2 = art.enqueue_art_job(rt, t1, workflow_id="lyric-scene")
     job2 = db.one("SELECT * FROM generation_jobs WHERE id = ?", (j2,))
     await art.run_art_phase(rt, job2)
     db.execute("UPDATE generation_jobs SET status = 'running' WHERE id = ?", (j2,))
     await art.run_art_render(rt, db.one("SELECT * FROM generation_jobs WHERE id = ?", (j2,)))
     row = db.one("SELECT * FROM tracks WHERE id = ?", (t1,))
-    assert row["art_version"] == 2 and row["art_workflow_id"] == "lyric-scene"
-    assert routes_public.art_links(cfg, t1, row["art_version"])["card"].endswith("?v=2")
-    print("links: versioned card/icon/master URLs; regeneration bumps the version")
+    second_art_id = row["art_id"]
+    assert second_art_id != first_art_id
+    assert (adir / f"{first_art_id}.png").is_file()   # history kept
+    rows = library.track_art_rows(db, t1)
+    assert [r["id"] for r in rows] == [second_art_id, first_art_id]  # newest first
+    assert routes_public.art_links(db, cfg, t1)["card"].startswith(
+        f"/art/{t1}/{second_art_id}/512.jpg")          # newest is current
+    # re-pick: the admin's choice changes the URLs the player gets
+    assert library.set_current_art(db, t1, first_art_id) is True
+    assert routes_public.art_links(db, cfg, t1)["master"] == \
+        f"/art/{t1}/{first_art_id}/full.png"
+    assert library.set_current_art(db, t2, first_art_id) is False  # not that track's
+    library.set_current_art(db, t1, second_art_id)
+    print("history: two immutable images, newest current, re-pick switches URLs")
 
     # unknown/odd names resolve to nothing (route 404s; no traversal)
     for bad_name in ("full.png/../../db", "art.png", "512.gif", "x512.png", "full"):
-        assert routes_public._art_file(cfg, t1, bad_name) is None, bad_name
-    assert routes_public._art_file(cfg, t1, "512.jpg").name == "art_512.jpg"
-    assert routes_public._art_file(cfg, t1, "full.png").name == "art.png"
+        assert routes_public._art_file(cfg, t1, second_art_id, bad_name) is None, bad_name
+    assert routes_public._art_file(cfg, t1, second_art_id, "512.jpg").name == \
+        f"{second_art_id}_512.jpg"
+    assert routes_public._art_file(cfg, t1, second_art_id, "full.png").name == \
+        f"{second_art_id}.png"
 
-    # remove
-    assert library.remove_art(db, cfg, t1) is True
+    # delete: a non-current image leaves the current pick alone
+    assert library.remove_art(db, cfg, first_art_id) is True
+    assert not (adir / f"{first_art_id}.png").exists()
+    assert db.one("SELECT COUNT(*) AS n FROM track_art WHERE id = ?",
+                  (first_art_id,))["n"] == 0
+    assert row["art_id"] == second_art_id or db.one(
+        "SELECT art_id FROM tracks WHERE id = ?", (t1,))["art_id"] == second_art_id
+    # deleting the CURRENT image leaves the track artless
+    assert library.remove_art(db, cfg, second_art_id) is True
     row = db.one("SELECT * FROM tracks WHERE id = ?", (t1,))
-    assert row["art_version"] == 0 and row["art_prompt"] is None
-    assert not (tdir / "art.png").exists() and not (tdir / "art_512.jpg").exists()
-    assert row["size_bytes"] == 0  # art was the only thing counted
-    assert routes_public.art_links(cfg, t1, row["art_version"]) is None
-    print("remove: files gone, columns reset, quota bytes returned")
+    assert row["art_id"] is None
+    assert routes_public.art_links(db, cfg, t1) is None
+    assert row["size_bytes"] == 0  # art bytes returned to the quota
+    print("delete: non-current kept, current deletion clears the pick, bytes returned")
 
     # jpeg input normalization through ffmpeg
     jpg = tmp / "in.jpg"
@@ -232,10 +254,28 @@ async def _main(cfg, tmp) -> None:
     png.write_bytes(MOCK_PNG)
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                     "-i", str(png), str(jpg)], check=True)
-    await library.store_art(db, cfg, t1, jpg.read_bytes(), seed=1,
-                            workflow_id="lyric-scene", prompt="jpeg in, png out")
-    assert (tdir / "art.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    norm_id = await library.store_art(db, cfg, t1, jpg.read_bytes(), seed=1,
+                                      workflow_id="lyric-scene",
+                                      prompt="jpeg in, png out")
+    assert (adir / f"{norm_id}.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     print("jpeg provider bytes normalized to a PNG master")
+
+    # ---- legacy (v14) layout relocation --------------------------------------
+    from infiniradio.util import iso, utcnow
+    t_legacy = _make_track(db, cfg, title="Legacy")
+    legacy_id = db.execute(
+        "INSERT INTO track_art (track_id, workflow_id, seed, prompt, created_at)"
+        " VALUES (?, 'cover', 1, 'p', ?)", (t_legacy, iso(utcnow())))
+    tdir = library.track_dir(cfg, t_legacy)
+    (tdir / "art.png").write_bytes(MOCK_PNG)
+    (tdir / "art_512.jpg").write_bytes(b"thumb")
+    db.execute("UPDATE tracks SET art_id = ? WHERE id = ?", (legacy_id, t_legacy))
+    assert library.migrate_legacy_art(db, cfg) == 1
+    assert (tdir / "art" / f"{legacy_id}.png").is_file()
+    assert (tdir / "art" / f"{legacy_id}_512.jpg").is_file()
+    assert not (tdir / "art.png").exists()
+    assert library.migrate_legacy_art(db, cfg) == 0   # idempotent
+    print("legacy v14 art relocated onto its row (idempotent)")
 
     # ---- GPU alternation ----------------------------------------------------
     db.execute("DELETE FROM generation_jobs")
@@ -285,7 +325,7 @@ async def _main(cfg, tmp) -> None:
     # backfill: oldest artless track first, within budget; failed jobs are
     # never retried by the trickle
     db.execute("DELETE FROM generation_jobs")
-    db.execute("UPDATE tracks SET art_version = 0")
+    db.execute("UPDATE tracks SET art_id = NULL")
     db.set_setting("art.backfill", True)
     oldest = db.one("SELECT MIN(id) AS m FROM tracks WHERE status = 'ready'")["m"]
     art.backfill_tick(rt)
@@ -342,16 +382,16 @@ async def _main(cfg, tmp) -> None:
 
     # ---- schedule payload carries art ---------------------------------------
     db.execute("DELETE FROM generation_jobs")
-    await library.store_art(db, cfg, fresh, MOCK_PNG, seed=3,
-                            workflow_id="lyric-scene", prompt="x" * 80)
+    fresh_id = await library.store_art(db, cfg, fresh, MOCK_PNG, seed=3,
+                                       workflow_id="lyric-scene", prompt="x" * 80)
     from infiniradio.util import iso, utcnow
     db.execute("INSERT INTO play_log (track_id, started_at) VALUES (?, ?)",
                (fresh, iso(utcnow())))
     payload = routes_public._schedule_payload(db, cfg, "listener-1", None, None)
     assert payload["current"]["id"] == fresh
-    assert payload["current"]["art"]["card"].startswith(f"/art/{fresh}/512.jpg?v=")
+    assert payload["current"]["art"]["card"] == f"/art/{fresh}/{fresh_id}/512.jpg"
     assert payload["recent"][0].get("art", "absent") == "absent"  # current-only
-    print("schedule payload: current track carries versioned art links")
+    print("schedule payload: current track carries the current pick's links")
 
 
 def run() -> None:

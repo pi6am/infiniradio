@@ -278,6 +278,37 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE tracks ADD COLUMN art_prompt TEXT;
     ALTER TABLE tracks ADD COLUMN art_generated_at TEXT;
     """,
+    15: """
+    -- Per-image art history. Every generated image becomes a track_art row
+    -- with its own files (music/<track_id>/art/<art_id>.png + thumbs):
+    -- regenerating never overwrites, the track points at its CURRENT pick
+    -- (tracks.art_id), the admin can review all candidates / re-pick /
+    -- delete, and the job view shows exactly what that job produced.
+    -- art_version/art_* columns move into the row; existing stored art is
+    -- relocated onto its new row by library.migrate_legacy_art at boot.
+    CREATE TABLE track_art (
+      id INTEGER PRIMARY KEY,
+      track_id INTEGER NOT NULL,
+      job_id INTEGER,             -- the art job that produced it (provenance)
+      workflow_id TEXT,
+      seed INTEGER,
+      prompt TEXT,
+      created_at TEXT NOT NULL
+    );
+    INSERT INTO track_art (track_id, workflow_id, seed, prompt, created_at)
+      SELECT id, art_workflow_id, art_seed, art_prompt,
+             COALESCE(art_generated_at, created_at)
+      FROM tracks WHERE art_version > 0;
+    ALTER TABLE tracks ADD COLUMN art_id INTEGER;
+    UPDATE tracks SET art_id = (
+      SELECT MAX(id) FROM track_art WHERE track_art.track_id = tracks.id
+    ) WHERE art_version > 0;
+    ALTER TABLE tracks DROP COLUMN art_version;
+    ALTER TABLE tracks DROP COLUMN art_seed;
+    ALTER TABLE tracks DROP COLUMN art_workflow_id;
+    ALTER TABLE tracks DROP COLUMN art_prompt;
+    ALTER TABLE tracks DROP COLUMN art_generated_at;
+    """,
 }
 
 

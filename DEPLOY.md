@@ -384,11 +384,11 @@ Behavior notes:
   generation, so nothing stale can be served. If you ever suspect caching,
   add a Cache Rule that bypasses cache for `*/live/live.m3u8`.
 - **Track art (`/art/...`) is edge-cached for free.** PNG/JPEG are in
-  Cloudflare's default cached-extension list, URLs carry the track's art
-  version as a query string (`/art/7/512.jpg?v=3`), and the query is part
-  of the cache key — a regeneration just produces new URLs, so no cache
-  purge is ever needed. The origin sends
-  `Cache-Control: public, max-age=31536000, immutable` plus an ETag.
+  Cloudflare's default cached-extension list, and every stored image owns
+  its URLs forever (the art id is in the path and files are immutable),
+  so nothing stale can ever be served — no purge is ever needed. The
+  origin sends `Cache-Control: public, max-age=31536000, immutable` plus
+  an ETag.
 - **Listener counting keeps working**: cloudflared connects from localhost
   and forwards the visitor's IP in `X-Forwarded-For`, which uvicorn trusts
   from `127.0.0.1` by default — the app still sees distinct listener IPs.

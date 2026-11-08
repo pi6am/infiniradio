@@ -86,23 +86,38 @@
 
 <div class="card">
   <h2 style="margin-top:0">track art</h2>
-  {% if art %}
-  <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
-    <img src="{{ art.master }}" alt="track art"
-         style="width:220px;aspect-ratio:1;object-fit:cover;border-radius:8px">
-    <div style="flex:1;min-width:240px">
-      <table>
-        <tr><th>generated</th><td>{{ t.art_generated_at or '—' }}</td></tr>
-        <tr><th>workflow</th><td>{{ t.art_workflow_id or '—' }} · seed {{ t.art_seed or '—' }}
-          · v{{ t.art_version }}</td></tr>
-        {% if art_job %}<tr><th>last job</th><td><a href="/admin/jobs/{{ art_job.id }}">#{{ art_job.id }}</a>
-          {{ art_job.status }}</td></tr>{% endif %}
-      </table>
-      <p class="muted" style="margin:10px 0 0;font-size:.9em">{{ t.art_prompt }}</p>
+  {% if art_rows %}
+  <div style="display:flex;gap:14px;flex-wrap:wrap">
+    {% for a in art_rows %}
+    <div style="width:190px">
+      <a href="{{ a.master }}" target="_blank" title="{{ a.row.prompt }}">
+        <img src="{{ a.card }}" alt="art #{{ a.row.id }}"
+             style="width:190px;aspect-ratio:1;object-fit:cover;border-radius:8px"></a>
+      <div class="muted" style="margin-top:6px">#{{ a.row.id }} · {{ a.row.workflow_id or '?' }}
+        {% if a.row.job_id %} · <a href="/admin/jobs/{{ a.row.job_id }}">job</a>{% endif %}</div>
+      <div class="muted" style="font-size:12px">{{ a.row.created_at }} · seed {{ a.row.seed or '—' }}</div>
+      <div style="margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        {% if a.row.id == t.art_id %}<span class="pill ok">current</span>
+        {% else %}
+        <form class="inline" method="post" action="/admin/art/{{ a.row.id }}/use">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">use</button>
+        </form>
+        {% endif %}
+        <form class="inline" method="post" action="/admin/art/{{ a.row.id }}/delete">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" style="border-color:var(--bad)">delete</button>
+        </form>
+      </div>
     </div>
+    {% endfor %}
   </div>
+  {% if art_current %}
+  <p class="muted" style="margin:14px 0 0">current image prompt:</p>
+  <pre class="abc">{{ art_current.row.prompt }}</pre>
+  {% endif %}
   {% elif art_job %}
-  <p class="muted" style="margin:0">no art yet — <a href="/admin/jobs/{{ art_job.id }}">job #{{ art_job.id }}</a>
+  <p class="muted" style="margin:0">no art stored yet — <a href="/admin/jobs/{{ art_job.id }}">job #{{ art_job.id }}</a>
     {{ art_job.status }}</p>
   {% else %}
   <p class="muted" style="margin:0">no art yet</p>
@@ -115,14 +130,10 @@
     <select name="workflow">
       <option value="">weighted pick</option>
       {% for w in art_workflows %}
-      <option value="{{ w.name }}" {% if w.name == t.art_workflow_id %}selected{% endif %}>{{ w.name }}</option>
+      <option value="{{ w.name }}" {% if art_current and w.name == art_current.row.workflow_id %}selected{% endif %}>{{ w.name }}</option>
       {% endfor %}
     </select>
-    <button type="submit">regenerate art</button>
-    {% if art %}
-    <button type="submit" formaction="/admin/track/{{ t.id }}/art/remove"
-            style="border-color:var(--bad)">remove</button>
-    {% endif %}
+    <button type="submit">generate art</button>
   </form>
   {% if not art_ready %}
   <p class="muted" style="margin:8px 0 0">{{ art_note }}</p>

@@ -239,7 +239,7 @@ def _schedule_payload(db: DB, cfg, listener_id: str, at_ms: float | None,
         # them out on each song change; the recent rows stay lean. Art
         # likewise: only the On Air card and the media session need it.
         current["lyrics"] = lyrics_public(cur.get("lyrics_snapshot"))
-        current["art"] = art_links(cfg, cur["id"], cur.get("art_version") or 0)
+        current["art"] = art_links(db, cfg, cur["id"])
     return {
         "server_time": iso(utcnow()),
         "server_time_ms": epoch_ms(),
@@ -397,31 +397,26 @@ async def api_track(request: Request, track_id: int):
 # ------------------------------------------------------------------ track art
 
 # URL names map onto disk files with fixed shapes; anything else is a 404
-# (the track_id is an int and the stem/ext are checked, so no traversal).
+# (the ids are ints and the stem/ext are checked, so no traversal).
 ART_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
              "webp": "image/webp"}
 
 
-def art_links(cfg, track_id: int, version: int) -> dict | None:
-    """Versioned /art URLs for a track with stored artwork, or None.
-
-    The URLs' ?v= carries the track's art_version: a regeneration produces
-    new URLs, so the immutable Cache-Control (and Cloudflare's edge, which
-    caches .png/.jpg by default and keys on the full URL) can never serve
-    a replaced image. Card = the largest thumbnail, icon = the smallest
-    (fall back to the master when a size is missing); the px values let
-    the player fill Media Session artwork sizes without guessing."""
-    if not version:
-        return None
-    files = library.art_file_map(cfg, track_id)
+def art_links_for(cfg, track_id: int, art_id: int) -> dict | None:
+    """Immutable /art URLs for one stored image, or None when its files
+    are gone. Each image owns its URLs forever (the art_id is in the path,
+    the files never change), so the immutable Cache-Control — and
+    Cloudflare's edge, which caches .png/.jpg by default — can never serve
+    a stale pick. Card = the largest thumbnail, icon = the smallest (fall
+    back to the master when a size is missing); the px values let the
+    player fill Media Session artwork sizes without guessing."""
+    files = library.art_file_map(cfg, track_id, art_id)
     if "full" not in files:
         return None
     sizes = sorted((int(k) for k in files if k != "full"))
 
     def url(key: str) -> str:
-        # URL stems are 'full'/'512'/...; the route maps them onto the
-        # art.png / art_<N>.<ext> files on disk.
-        return f"/art/{track_id}/{key}{files[key].suffix}?v={version}"
+        return f"/art/{track_id}/{art_id}/{key}{files[key].suffix}"
 
     card_key = str(sizes[-1]) if sizes else "full"
     icon_key = str(sizes[0]) if sizes else card_key
@@ -432,35 +427,43 @@ def art_links(cfg, track_id: int, version: int) -> dict | None:
     }
 
 
-def _art_file(cfg, track_id: int, name: str) -> Path | None:
+def art_links(db, cfg, track_id: int) -> dict | None:
+    """URLs for the track's CURRENT pick (players and previews)."""
+    row = library.current_art(db, track_id)
+    if row is None:
+        return None
+    return art_links_for(cfg, track_id, row["id"])
+
+
+def _art_file(cfg, track_id: int, art_id: int, name: str) -> Path | None:
     stem, dot, ext = name.rpartition(".")
     ext = ext.lower()
     if dot and stem and ext in ART_MEDIA:
         if stem == "full":
-            want = "art.png"
+            want = f"{art_id}.png"
         elif stem.isdigit():
-            want = f"art_{stem}.{ext}"
+            want = f"{art_id}_{stem}.{ext}"
         else:
             return None
-        p = library.track_dir(cfg, track_id) / want
+        p = library.art_dir(cfg, track_id) / want
         return p if p.is_file() else None
     return None
 
 
-@router.get("/art/{track_id}/{name}")
-@router.head("/art/{track_id}/{name}")
-async def art_file(request: Request, track_id: int, name: str):
-    """Track artwork: immutable per URL version (see art_links). Long
-    max-age + ETag so browsers and Cloudflare's edge cache it; a
-    regeneration changes the URL instead of needing a purge."""
-    p = _art_file(request.app.state.rt.cfg, track_id, name)
+@router.get("/art/{track_id}/{art_id}/{name}")
+@router.head("/art/{track_id}/{art_id}/{name}")
+async def art_file(request: Request, track_id: int, art_id: int, name: str):
+    """Track artwork: one immutable URL per stored image (see
+    art_links_for). Long max-age + ETag so browsers and Cloudflare's edge
+    cache it; picking a different current image changes the URL the
+    schedule hands out, never the bytes behind an old one."""
+    p = _art_file(request.app.state.rt.cfg, track_id, art_id, name)
     if p is None:
         return Response(status_code=404)
-    st = p.stat()
     return FileResponse(p, media_type=ART_MEDIA[p.suffix.lstrip(".").lower()],
                         headers={
                             "Cache-Control": "public, max-age=31536000, immutable",
-                            "ETag": f'"{track_id}-{name}-{int(st.st_mtime)}-{st.st_size}"',
+                            "ETag": f'"{track_id}-{art_id}-{name}"',
                         })
 
 

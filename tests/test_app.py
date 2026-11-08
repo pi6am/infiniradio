@@ -123,10 +123,10 @@ def run() -> None:
         assert app_art is not None
         from infiniradio.web.routes_public import router as public_router
         pub_paths = {r.path for r in public_router.routes}
-        assert "/art/{track_id}/{name}" in pub_paths, pub_paths
+        assert "/art/{track_id}/{art_id}/{name}" in pub_paths, pub_paths
         admin_paths = {r.path for r in admin_router.routes}
         for need in ("/admin/track/{track_id}/art/regen",
-                     "/admin/track/{track_id}/art/remove",
+                     "/admin/art/{art_id}/use", "/admin/art/{art_id}/delete",
                      "/admin/art-workflows/{workflow_id}/toggle",
                      "/admin/art-workflows/{workflow_id}/weight"):
             assert need in admin_paths, f"missing route {need}"
