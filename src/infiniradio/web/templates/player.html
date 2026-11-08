@@ -12,6 +12,24 @@
 <meta property="og:url" content="{{ site_base }}/">
 <meta property="og:image" content="{{ site_base }}/static/android-chrome-512x512.png">
 <meta name="twitter:card" content="summary">
+<style>
+  /* Track-art layouts (decided in JS once the image loads — layoutArt).
+     Without .has-art the card is exactly the pre-art presentation. */
+  #np-art-col, #np-art-slot, #np-art { display: none; }
+  #np-card.has-art #np-art { display: block; border-radius: 8px; }
+  /* Portrait / square: centered between title and subtitle */
+  #np-card.has-art.portrait #np-art-slot { display: block; }
+  #np-card.has-art.portrait #np-art {
+    max-width: min(100%, 320px); max-height: 340px;
+    margin: 10px auto 12px;
+  }
+  /* Landscape: a column left of the rest of the card (narrow viewports
+     fall back to the portrait placement — layoutArt re-decides there) */
+  #np-card.has-art.landscape { display: flex; gap: 18px; align-items: center; }
+  #np-card.has-art.landscape #np-art-col { display: block; flex: none; width: 264px; }
+  #np-card.has-art.landscape #np-main { flex: 1; min-width: 0; }
+  #np-card.has-art.landscape #np-art { width: 100%; height: auto; }
+</style>
 {% endblock %}
 {% block content %}
 
@@ -19,14 +37,16 @@
 
 <div class="player-main">
 
-<section class="card">
-  <audio id="audio" controls autoplay playsinline></audio>
-  <h2 style="margin:14px 0 4px">on air now</h2>
-  <img id="np-art" alt="" hidden
-       style="width:min(100%,340px);aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;margin:0 auto 12px">
-  <div id="np-title" class="muted">warming up…</div>
-  <div id="np-meta" class="muted"></div>
-  <div id="np-votes" style="margin-top:10px"></div>
+<section class="card" id="np-card">
+  <div id="np-art-col"></div>
+  <div id="np-main">
+    <audio id="audio" controls autoplay playsinline></audio>
+    <h2 style="margin:14px 0 4px">on air now</h2>
+    <div id="np-art-slot"></div>
+    <div id="np-title" class="muted">warming up…</div>
+    <div id="np-meta" class="muted"></div>
+    <div id="np-votes" style="margin-top:10px"></div>
+  </div>
 </section>
 
 <div class="card" id="np-recent-card" hidden>
@@ -51,7 +71,10 @@
 <script>
 (function () {
   const audioEl = document.getElementById('audio');
-  const elArt = document.getElementById('np-art');
+  const elCard = document.getElementById('np-card');
+  const elArt = document.createElement('img');   // placed by layoutArt
+  const elArtCol = document.getElementById('np-art-col');
+  const elArtSlot = document.getElementById('np-art-slot');
   const elTitle = document.getElementById('np-title');
   const elMeta = document.getElementById('np-meta');
   const elVotes = document.getElementById('np-votes');
@@ -100,6 +123,53 @@
   });
   applyFold();
 
+  // ---- track art: three presentations --------------------------------------
+  // No art (or not yet loaded): the card renders exactly as it did before
+  // art existed. Portrait/square art slots in between title and subtitle;
+  // landscape art becomes a column left of everything else. Placement is
+  // decided from the image's real dimensions once it loads, and re-decided
+  // when the viewport crosses the width where the column stops fitting
+  // (narrow screens stack like portrait).
+  let artShown = false;
+  let artLoaded = false;
+  let artAspect = 1;
+  const artWideMQ = window.matchMedia('(min-width: 680px)');
+  function layoutArt() {
+    if (!artShown || !artLoaded) return;
+    const landscape = artAspect > 1 && artWideMQ.matches;
+    elCard.classList.add('has-art');
+    elCard.classList.toggle('landscape', landscape);
+    elCard.classList.toggle('portrait', !landscape);
+    const parent = landscape ? elArtCol : elArtSlot;
+    if (elArt.parentElement !== parent) parent.appendChild(elArt);
+  }
+  elArt.addEventListener('load', function () {
+    artLoaded = true;
+    artAspect = elArt.naturalWidth / (elArt.naturalHeight || 1) || 1;
+    layoutArt();
+  });
+  elArt.addEventListener('error', function () {
+    // Missing or stale file: drop the art UI, keep the card alive.
+    artShown = false;
+    elCard.classList.remove('has-art', 'portrait', 'landscape');
+  });
+  artWideMQ.addEventListener('change', layoutArt);
+  function setTrackArt(art) {
+    if (art && art.card) {
+      artShown = true;
+      if (elArt.getAttribute('src') !== art.card) {  // ?v= busts per regen
+        artLoaded = false;
+        elCard.classList.remove('has-art', 'portrait', 'landscape');
+        elArt.src = art.card;
+      }
+      layoutArt();
+    } else {
+      artShown = false;
+      elCard.classList.remove('has-art', 'portrait', 'landscape');
+      elArt.removeAttribute('src');
+    }
+  }
+
   // ---- rendering (all text via textContent; DOM built by hand) -------------
   function fmtDur(s) {
     s = Math.round(s || 0);
@@ -140,14 +210,7 @@
     elLyricsCard.hidden = !lyr;
     elCols.classList.toggle('has-lyrics', !!lyr);
     if (cur) {
-      const art = cur.art && cur.art.card;
-      if (art) {
-        if (elArt.getAttribute('src') !== art) elArt.src = art;  // ?v= busts per regen
-        elArt.hidden = false;
-      } else {
-        elArt.hidden = true;
-        elArt.removeAttribute('src');
-      }
+      setTrackArt(cur.art);
       elTitle.textContent = cur.title;
       elTitle.className = '';
       elTitle.style.fontSize = '1.25rem';
