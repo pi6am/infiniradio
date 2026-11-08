@@ -126,9 +126,9 @@
   {% if t.status == 'ready' %}
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center">
     <form method="post" action="/admin/track/{{ t.id }}/art/regen"
-          style="display:flex;gap:8px;align-items:center">
+          style="display:flex;gap:8px;align-items:center;flex:1;min-width:220px">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <select name="workflow">
+      <select name="workflow" style="width:auto;flex:1">
         <option value="">weighted pick</option>
         {% for w in art_workflows %}
         <option value="{{ w.name }}" {% if art_current and w.name == art_current.row.workflow_id %}selected{% endif %}>{{ w.name }}</option>
